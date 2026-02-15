@@ -1,0 +1,188 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 222 47% 4%;
+    --foreground: 210 40% 98%;
+
+    --card: 222 47% 4%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222 47% 4%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 217 91% 60%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 217 33% 17%;
+    --muted-foreground: 215 20% 65%;
+
+    --accent: 217 33% 17%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 217 33% 17%;
+    --input: 217 33% 17%;
+    --ring: 213 27% 84%;
+
+    --radius: 0.5rem;
+
+    --sidebar-background: 240 6% 10%;
+    --sidebar-foreground: 240 5% 96%;
+    --sidebar-primary: 224 76% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 4% 16%;
+    --sidebar-accent-foreground: 240 5% 96%;
+    --sidebar-border: 240 4% 16%;
+    --sidebar-ring: 217 91% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', sans-serif;
+    -webkit-tap-highlight-color: transparent;
+    background-image: radial-gradient(circle at 50% 0%, rgba(37, 99, 235, 0.05) 0%, transparent 50%);
+  }
+}
+
+/* Brand Colors Utility */
+.gradient-text-blue {
+  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.blue-glow {
+  box-shadow: 0 0 40px rgba(37, 99, 235, 0.15);
+}
+
+.glass-card {
+  background: rgba(22, 27, 34, 0.6);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Custom Scrollbar */
+.custom-scrollbar::-webkit-scrollbar { width: 5px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: rgba(255,255,255,0.02); }
+.custom-scrollbar::-webkit-scrollbar-thumb { 
+  background: rgba(37, 99, 235, 0.2); 
+  border-radius: 10px; 
+}
+
+/* Animations */
+.animate-fade-in { animation: fadeIn 0.6s ease-out forwards; }
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* White Trail Border Animation */
+@keyframes trail {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.trail-container {
+  position: relative;
+  padding: 2px;
+  overflow: hidden;
+  border-radius: 3.5rem;
+}
+
+.trail-container::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: conic-gradient(
+    transparent 0%,
+    transparent 70%,
+    rgba(255, 255, 255, 0.8) 85%,
+    white 90%,
+    rgba(255, 255, 255, 0.8) 95%,
+    transparent 100%
+  );
+  animation: trail 4s linear infinite;
+  z-index: 0;
+}
+
+.trail-container::after {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  border-radius: calc(3.5rem - 2px);
+  background: hsl(var(--background));
+  z-index: 1;
+}
+
+.trail-inner {
+  position: relative;
+  z-index: 10;
+  border-radius: inherit;
+  height: 100%;
+  width: 100%;
+}
+
+/* Scroll Reveal Animation */
+.scroll-hidden {
+  opacity: 0;
+  transform: translateY(40px);
+  transition: opacity 0.8s ease-out, transform 0.8s ease-out;
+}
+
+.scroll-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Circular Progress */
+.circle-progress-container {
+  position: relative;
+  display: inline-block;
+  overflow: visible; 
+}
+
+.circle-progress-svg {
+  overflow: visible;
+  transform: rotate(-90deg);
+}
+
+.glow-green { filter: drop-shadow(0 0 8px rgba(34, 197, 94, 0.6)); }
+.glow-blue { filter: drop-shadow(0 0 12px rgba(59, 130, 246, 0.7)); }
+
+.dashboard-card {
+  background: rgba(22, 27, 34, 0.6);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 1.5rem;
+  padding: 1.5rem;
+}
+
+@media (min-width: 768px) {
+  .dashboard-card {
+    padding: 2rem;
+  }
+}
+
+/* Mobile optimizations */
+@media (max-width: 640px) {
+  h1 { font-size: 2.5rem !important; line-height: 1 !important; }
+}

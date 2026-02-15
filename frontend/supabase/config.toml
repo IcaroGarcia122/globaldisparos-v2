@@ -1,0 +1,4 @@
+project_id = "anyorcmtnhetmzdwbmas"
+
+[functions.seed-admin]
+verify_jwt = false
