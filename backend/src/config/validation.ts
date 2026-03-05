@@ -140,8 +140,8 @@ const envConfig: EnvConfig = {
   redisTTL: getEnvNumber(process.env.REDIS_TTL, 3600), // 1 hour
 
   // CORS
-  frontendUrl: process.env.FRONTEND_URL || 'http://localhost:8080',
-  corsOrigins: parseCorsOrigins(process.env.CORS_ORIGINS || 'http://localhost:8080'),
+  frontendUrl: process.env.FRONTEND_URL || 'http://localhost:5173',
+  corsOrigins: parseCorsOrigins(process.env.CORS_ORIGINS || 'http://localhost:5173'),
   corsCredentials: getEnvBoolean(process.env.CORS_CREDENTIALS, true),
 
   // Rate Limiting

@@ -34,18 +34,62 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Create instance (GET QR Code)
-  if (pathname.match(/^\/instance\/create\/?$/) && req.method === 'GET') {
-    const instanceName = query.instanceName || 'default-instance';
+  // Create instance (POST or GET QR Code)
+  if (pathname.match(/^\/instance\/create\/?$/) && (req.method === 'GET' || req.method === 'POST')) {
+    let instanceName = query.instanceName || 'default-instance';
     
+    // Se for POST, parsear body
+    if (req.method === 'POST') {
+      let body = '';
+      return req.on('data', chunk => {
+        body += chunk.toString();
+        if (body.length > 1e6) {
+          res.writeHead(413);
+          res.end('Payload muito grande');
+          return;
+        }
+      }).on('end', () => {
+        try {
+          const data = JSON.parse(body);
+          instanceName = data.instanceName || `instance_${Date.now()}`;
+          
+          // Store instance
+          instances.set(instanceName, {
+            name: instanceName,
+            status: 'connecting',
+            createdAt: new Date()
+          });
+          
+          res.writeHead(201);
+          res.end(JSON.stringify({
+            instance: {
+              instanceName: instanceName,
+              instanceId: Math.random().toString(36).substr(2, 9),
+              qrcode: {
+                code: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAADCAQAAABIeIiRAAAA==',
+                base64: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAADCAQAAABIeIiRAAAA==',
+                url: 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=test_qr'
+              },
+              status: 'connecting',
+              statusConnection: 'connecting'
+            }
+          }));
+        } catch (err) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: 'JSON inválido' }));
+        }
+      });
+    }
+    
+    // GET request
     res.writeHead(201);
     res.end(JSON.stringify({
       instance: {
         instanceName: instanceName,
         instanceId: Math.random().toString(36).substr(2, 9),
         qrcode: {
-          code: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAADCAQAAABIeIiRAAAA',
-          base64: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAADCAQAAABIeIiRAAAA',
+          code: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAADCAQAAABIeIiRAAAA==',
+          base64: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAADCAQAAABIeIiRAAAA==',
           url: 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=example'
         },
         status: 'connecting',
@@ -83,6 +127,52 @@ const server = http.createServer((req, res) => {
         webhookUrl: null,
         webhookByEvents: true
       }
+    }));
+    return;
+  }
+
+  // Get QR Code (múltiplos endpoints suportados)
+  if (pathname.match(/^\/instance\/(.+?)\/(qrcode|connect)\/?$/) && req.method === 'GET') {
+    const instanceName = pathname.split('/')[2];
+    
+    res.writeHead(200);
+    res.end(JSON.stringify({
+      qrcode: {
+        code: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAADCAQAAABIeIiRAAAA==',
+        base64: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAADCAQAAABIeIiRAAAA==',
+        url: 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=example'
+      },
+      qr: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAADCAQAAABIeIiRAAAA==',
+      base64: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAADCAQAAABIeIiRAAAA==',
+      status: 'connecting',
+      statusConnection: 'connecting'
+    }));
+    return;
+  }
+
+  // Get alternative QR Code endpoints
+  if (pathname.match(/^\/qrcode\/(.+?)\/?$/) && req.method === 'GET') {
+    res.writeHead(200);
+    res.end(JSON.stringify({
+      qrcode: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAADCAQAAABIeIiRAAAA==',
+      qr: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAADCAQAAABIeIiRAAAA==',
+      base64: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAADCAQAAABIeIiRAAAA=='
+    }));
+    return;
+  }
+
+  // Get connection state
+  if (pathname.match(/^\/instance\/connectionState\/(.+?)\/?$/) && req.method === 'GET') {
+    const instanceName = pathname.split('/')[3];
+    
+    res.writeHead(200);
+    res.end(JSON.stringify({
+      instance: {
+        instanceName: instanceName,
+        state: 'connecting', // Pode ser: connecting, open, close, offline
+        statusConnection: 'connecting'
+      },
+      state: 'connecting'
     }));
     return;
   }

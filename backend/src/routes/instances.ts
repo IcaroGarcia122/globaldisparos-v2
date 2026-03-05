@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { WhatsAppInstance } from '../models';
 import whatsappService from '../adapters/whatsapp.config';
+import evolutionService from '../services/EvolutionService';
+import { io } from '../server';
 import { Op } from 'sequelize';
 import crypto from 'crypto';
 
@@ -23,14 +25,102 @@ function generateHash(data: any): string {
   return crypto.createHash('md5').update(JSON.stringify(data)).digest('hex');
 }
 
+/**
+ * Iniciar polling contínuo do QR Code para uma instância
+ * Atualiza via Socket.IO a cada 3 segundos
+ */
+function startQRPolling(
+  instanceName: string,
+  instanceId: number,
+  userId: number,
+  socketId?: string
+): void {
+  let attempts = 0;
+  const maxAttempts = 40; // ~2 minutos de tentativas
+  let pollingInterval: NodeJS.Timeout | null = null;
+  let lastQRCode: string | null = null;
+  let sameQRCount = 0; // Se mesmo QR por 3x, provavelmente está esperando scan
+
+  async function poll() {
+    attempts++;
+    console.log(`[QR-POLLING] Tentativa ${attempts}/${maxAttempts} para ${instanceName}`);
+    
+    if (attempts > maxAttempts) {
+      if (pollingInterval) clearInterval(pollingInterval);
+      console.log(`[QR-POLLING] ⏰ Timeout após ${attempts} tentativas para ${instanceName}`);
+      io.to(socketId || `user-${userId}`).emit('qr_timeout', { instanceName, instanceId });
+      return;
+    }
+
+    try {
+      // 1. Verificar se já está conectado
+      const state = await evolutionService.getConnectionState(instanceName);
+      console.log(`[QR-POLLING] Estado: ${state || 'unknown'}`);
+      
+      if (state === 'open' || state === 'connected' || state === 'CONNECTED') {
+        if (pollingInterval) clearInterval(pollingInterval);
+        console.log(`[QR-POLLING] ✅ Instância ${instanceName} conectada!`);
+        
+        // Atualizar banco
+        await WhatsAppInstance.update(
+          { status: 'connected', qrCode: null },
+          { where: { id: instanceId } }
+        );
+        
+        io.to(socketId || `user-${userId}`).emit('whatsapp_connected', {
+          instanceName,
+          instanceId,
+          status: 'open'
+        });
+        return;
+      }
+
+      // 2. Obter QR Code atual
+      const qrCode = await evolutionService.fetchQRCode(instanceName);
+      console.log(`[QR-POLLING] QR válido? ${!!qrCode}`);
+      
+      if (qrCode) {
+        // Verificar se é diferente do anterior
+        if (qrCode === lastQRCode) {
+          sameQRCount++;
+          console.log(`[QR-POLLING] QR repetido: ${sameQRCount}x`);
+        } else {
+          sameQRCount = 0;
+          lastQRCode = qrCode;
+        }
+
+        // Sempre emitir (pode ter sido atualizado)
+        io.to(socketId || `user-${userId}`).emit('qr_update', {
+          qrCode,
+          instanceName,
+          instanceId,
+          timestamp: new Date().toISOString()
+        });
+      } else {
+        console.warn(`[QR-POLLING] Sem QR retornado para ${instanceName}`);
+      }
+    } catch (err: any) {
+      console.error(`[QR-POLLING] Erro:`, err.message);
+    }
+  }
+
+  // Iniciar polling a cada 3 segundos
+  pollingInterval = setInterval(poll, 3000);
+  console.log(`[QR-POLLING] ✅ Polling iniciado para ${instanceName}`);
+  
+  // Executar primeira vez imediatamente
+  poll();
+}
+
 router.post('/', authenticate, async (req: AuthRequest, res) => {
   try {
     const { name, accountAge } = req.body;
     const userId = req.user!.id;
     const userPlan = req.user!.plan;
     const userRole = req.user!.role;
+    const socketId = req.headers['x-socket-id'] as string;
     
-    console.log(`🔧 POST /instances - User ${userId} (${userRole}), plan: ${userPlan}, name: "${name}", age: ${accountAge}`);
+    console.log(`🔧 POST /instances - User ${userId} (${userRole}), plan: ${userPlan}, name: "${name}"`);
     
     // Validar entrada
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
@@ -82,7 +172,7 @@ router.post('/', authenticate, async (req: AuthRequest, res) => {
     
     console.log(`✅ Instância criada: ID ${instance.id}`);
     
-    // � Invalidar cache
+    // Invalidar cache
     Array.from(instanceListCache.keys()).forEach(key => {
       if (key.startsWith(`${userId}:`)) {
         instanceListCache.delete(key);
@@ -90,20 +180,45 @@ router.post('/', authenticate, async (req: AuthRequest, res) => {
     });
     console.log(`🔄 Cache invalidado para user ${userId}`);
     
-    // �🚀 INICIAR CONEXÃO COM EVOLUTION API IMEDIATAMENTE
-    console.log(`🚀 Iniciando conexão com Evolution API para instância ${instance.id}...`);
-    try {
-      await whatsappService.connect(instance.id);
-      console.log(`✅ Conexão iniciada com sucesso`);
-    } catch (connectError: any) {
-      console.error(`⚠️ Erro ao conectar Evolution API:`, connectError.message);
-      // Não falhar a requisição - Evolution API pode conectar em background
-    }
-    
-    res.status(201).json(instance);
+    // Responder imediatamente
+    res.status(201).json({
+      id: instance.id,
+      name: instance.name,
+      userId: instance.userId,
+      isActive: instance.isActive,
+      status: 'pending',
+      message: 'Instância criada. Aguardando QR Code...'
+    });
+
+    // IMPORTANTE: Iniciar processo de conexão em BACKGROUND
+    setImmediate(async () => {
+      try {
+        // 1. Criar no Evolution API
+        const instanceName = `instance_${instance.id}`;
+        console.log(`🔗 Criando na Evolution API: ${instanceName}`);
+        
+        await evolutionService.createInstance(instanceName);
+        console.log(`✅ Evolution API instância criada`);
+
+        // 2. Aguardar um pouco para inicializar
+        await new Promise(r => setTimeout(r, 2000));
+
+        // 3. Iniciar polling do QR Code
+        console.log(`🔄 Iniciando polling do QR Code para ${instanceName}`);
+        startQRPolling(instanceName, instance.id, userId, socketId);
+
+      } catch (error: any) {
+        console.error(`❌ Erro no processo de conexão:`, error.message);
+        io.to(socketId || `user-${userId}`).emit('instance_error', {
+          instanceId: instance.id,
+          error: error.message,
+          status: 'failed'
+        });
+      }
+    });
+
   } catch (error: any) {
     console.error('❌ Erro ao criar instância:', error.message);
-    console.error('Stack:', error.stack);
     res.status(500).json({ error: error.message || 'Erro ao criar instância' });
   }
 });

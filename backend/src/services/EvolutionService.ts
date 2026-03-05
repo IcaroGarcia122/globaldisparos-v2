@@ -151,24 +151,48 @@ class EvolutionService {
 
       // Tentar múltiplos endpoints possíveis
       const endpoints = [
-        `/instance/${instanceName}/qrcode`,
-        `/instance/qrcode/${instanceName}`,
-        `/qrcode/${instanceName}`,
-        `/instance/${instanceName}/connect`
+        `/instance/connect/${instanceName}`,      // ✅ CORRETO - rota oficial Evolution API
+        `/instance/${instanceName}/qrcode`,        // fallback
+        `/instance/qrcode/${instanceName}`,        // fallback
+        `/qrcode/${instanceName}`,                 // fallback
       ];
 
       for (const endpoint of endpoints) {
         try {
+          console.log(`[QR-SERVICE] Testando endpoint: ${endpoint}`);
           const response = await this.client.get(endpoint);
           
-          const qrCode = 
-            response.data?.qrcode ||
-            response.data?.qr ||
-            response.data?.code ||
-            response.data?.base64;
+          // Extrair a string base64 em qualquer formato que a Evolution retorne
+          let qrCode: string | null = null;
+          
+          // Se for string direto
+          if (typeof response.data?.qr === 'string') {
+            qrCode = response.data.qr;
+            console.log(`[QR-SERVICE] Encontrado em response.data.qr, length: ${qrCode.length}`);
+          } else if (typeof response.data?.base64 === 'string') {
+            qrCode = response.data.base64;
+            console.log(`[QR-SERVICE] Encontrado em response.data.base64, length: ${qrCode.length}`);
+          } else if (typeof response.data?.code === 'string') {
+            qrCode = response.data.code;
+            console.log(`[QR-SERVICE] Encontrado em response.data.code, length: ${qrCode.length}`);
+          }
+          // Se for objeto com .base64 dentro
+          else if (response.data?.qrcode?.base64 && typeof response.data.qrcode.base64 === 'string') {
+            qrCode = response.data.qrcode.base64;
+            console.log(`[QR-SERVICE] Encontrado em response.data.qrcode.base64, length: ${qrCode.length}`);
+          } else if (response.data?.qrcode?.code && typeof response.data.qrcode.code === 'string') {
+            qrCode = response.data.qrcode.code;
+            console.log(`[QR-SERVICE] Encontrado em response.data.qrcode.code, length: ${qrCode.length}`);
+          }
+          // Se a propriedade existe mas é um objeto puro, tenta extrair dela
+          else if (typeof response.data?.qrcode === 'object' && response.data.qrcode !== null) {
+            const obj = response.data.qrcode as any;
+            qrCode = obj.base64 || obj.code || obj.qr || null;
+            if (qrCode) console.log(`[QR-SERVICE] Extraído de objeto, length: ${qrCode.length}`);
+          }
 
-          if (qrCode) {
-            logger.info(`✅ QR Code obtido de: ${endpoint}`);
+          if (qrCode && typeof qrCode === 'string' && qrCode.length > 100) {
+            logger.info(`✅ QR Code obtido de: ${endpoint} (${qrCode.length} chars)`);
             return qrCode;
           }
         } catch (err) {
@@ -226,6 +250,34 @@ class EvolutionService {
     } catch (error: any) {
       logger.error(`❌ Erro ao deletar instância: ${error.message}`);
       throw error;
+    }
+  }
+
+  /**
+   * Obter estado da conexão (para polling do QR Code)
+   */
+  async getConnectionState(instanceName: string): Promise<string | null> {
+    try {
+      const response = await this.client.get(`/instance/connectionState/${instanceName}`);
+      const state = response.data?.instance?.state || response.data?.state;
+      logger.debug(`[Connection] ${instanceName} -> ${state}`);
+      return state;
+    } catch (error: any) {
+      logger.debug(`[Connection] Erro ao verificar: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Buscar QR Code (método isolado)
+   */
+  async fetchQRCode(instanceName: string): Promise<string | null> {
+    try {
+      const qrCode = await this.getQRCode(instanceName);
+      return qrCode;
+    } catch (error: any) {
+      logger.debug(`[QRCode] Erro: ${error.message}`);
+      return null;
     }
   }
 

@@ -13,7 +13,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import api from '../services/api';
+import { fetchAPI } from '@/config/api';
 import { io, Socket } from 'socket.io-client';
 
 interface Instance {
@@ -123,7 +123,7 @@ export default function Disparador() {
 
   const carregarInstancias = async () => {
     try {
-      const response = await api.get('/api/instances');
+      const response = await fetchAPI('/instances');
       const instanciasConectadas = response.data.filter(
         (inst: Instance) => inst.status === 'connected'
       );
@@ -146,11 +146,11 @@ export default function Disparador() {
 
     setLoading(true);
     try {
-      const response = await api.get(`/api/groups`, {
-        params: { instanceId: selectedInstance }
+      const response = await fetchAPI(`/groups?instanceId=${selectedInstance}`, {
+        method: 'GET'
       });
 
-      const gruposData = response.data || [];
+      const gruposData = response || [];
       setGroups(gruposData);
 
       if (gruposData.length === 0) {
@@ -198,12 +198,15 @@ export default function Disparador() {
 
     setLoading(true);
     try {
-      const response = await api.post('/api/disparador/iniciar', {
-        instanceId: selectedInstance,
-        groupIds: Array.from(selectedGroups),
-        message,
-        interval,
-        campaignName: campaignName || `Campanha de ${new Date().toLocaleString()}`
+      const response = await fetchAPI('/disparador/iniciar', {
+        method: 'POST',
+        body: {
+          instanceId: selectedInstance,
+          groupIds: Array.from(selectedGroups),
+          message,
+          interval,
+          campaignName: campaignName || `Campanha de ${new Date().toLocaleString()}`
+        }
       });
 
       console.log('✅ Campanha iniciada:', response.data);
@@ -233,7 +236,9 @@ export default function Disparador() {
     if (!campaignId) return;
 
     try {
-      await api.post(`/api/disparador/${campaignId}/pausar`);
+      await fetchAPI(`/disparador/${campaignId}/pausar`, {
+        method: 'POST'
+      });
       console.log('⏸️  Campanha pausada');
       // Atualizar UI
     } catch (error: any) {
@@ -245,7 +250,9 @@ export default function Disparador() {
     if (!campaignId) return;
 
     try {
-      await api.post(`/api/disparador/${campaignId}/retomar`);
+      await fetchAPI(`/disparador/${campaignId}/retomar`, {
+        method: 'POST'
+      });
       console.log('▶️  Campanha retomada');
       // Atualizar UI
     } catch (error: any) {
@@ -259,7 +266,9 @@ export default function Disparador() {
     if (!confirm('Tem certeza que deseja parar a campanha?')) return;
 
     try {
-      await api.post(`/api/disparador/${campaignId}/parar`);
+      await fetchAPI(`/disparador/${campaignId}/parar`, {
+        method: 'POST'
+      });
       console.log('⏹️  Campanha parada');
       setCampaignRunning(false);
 

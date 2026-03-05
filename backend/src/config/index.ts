@@ -83,7 +83,7 @@ const config: Config = {
     email: process.env.ADMIN_EMAIL || 'admin@example.com',
     password: process.env.ADMIN_PASSWORD || 'Admin@123456',
   },
-  frontendUrl: process.env.FRONTEND_URL || 'http://localhost:8080',
+  frontendUrl: process.env.FRONTEND_URL || 'http://localhost:5173',
   authSessionsDir: process.env.AUTH_SESSIONS_DIR || path.join(process.cwd(), 'auth_sessions'),
   antiBan: {
     newAccountDays: parseInt(process.env.ANTI_BAN_NEW_ACCOUNT_DAYS || '7', 10),

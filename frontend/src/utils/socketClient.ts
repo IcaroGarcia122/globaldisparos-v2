@@ -13,8 +13,9 @@ export const initSocket = (token: string): Socket => {
 
   socket = io(socketUrl, {
     auth: {
-      token: token,
+      token: token,  // ✅ Token no auth (correto para autenticação)
     },
+    transports: ['websocket', 'polling'],
     reconnection: true,
     reconnectionDelay: 1000,
     reconnectionDelayMax: 5000,
@@ -22,11 +23,16 @@ export const initSocket = (token: string): Socket => {
   });
 
   socket.on('connect', () => {
-    logger.info(`✅ Socket.IO conectado: ${socket?.id}`);
+    logger.info(`✅ Socket.IO conectado com sucesso: ${socket?.id}`);
+    logger.info(`✅ Token autenticado no servidor`);
   });
 
   socket.on('disconnect', (reason) => {
     logger.warn(`🔌 Socket.IO desconectado: ${reason}`);
+  });
+
+  socket.on('connect_error', (error) => {
+    logger.error(`❌ Erro Socket.IO (auth falhou?):`, error);
   });
 
   socket.on('error', (error) => {

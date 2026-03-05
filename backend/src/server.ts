@@ -42,29 +42,42 @@ export const io = new Server(server, {
   serveClient: false,
 });
 
+// ✅ MIDDLEWARE DE AUTENTICAÇÃO PARA SOCKET.IO
+io.use((socket, next) => {
+  const token = socket.handshake.auth?.token 
+             || socket.handshake.headers?.authorization?.replace('Bearer ', '');
+
+  if (!token) {
+    console.warn(`⚠️ [SOCKET-AUTH] Nenhum token fornecido para socket ${socket.id}`);
+    return next(new Error('Token não fornecido'));
+  }
+
+  try {
+    const decoded = jwtService.verifyAccessToken(token) as any;
+    socket.data.userId = decoded.userId || decoded.id;
+    
+    console.log(`✅ [SOCKET-AUTH] Socket ${socket.id} autenticado`);
+    console.log(`✅ [SOCKET-AUTH] userId: ${socket.data.userId}`);
+    
+    next();
+  } catch (err: any) {
+    console.error(`❌ [SOCKET-AUTH] Token inválido para socket ${socket.id}:`, err.message);
+    return next(new Error('Token inválido'));
+  }
+});
+
 io.on('connection', (socket) => {
   logger.info(`✅ Cliente conectado via Socket.IO: ${socket.id}`);
   logger.info(`   Handshake auth:`, socket.handshake.auth);
   logger.info(`   Headers:`, socket.handshake.headers);
 
-  // Tentar autenticar com token
-  try {
-    const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.replace('Bearer ', '');
+  // Socket já foi autenticado pelo middleware
+  if (socket.data.userId) {
+    websocketService.registerUserSocket(socket, socket.data.userId);
     
-    if (token) {
-      logger.info(`   Token recebido, comprimento: ${token.length}`);
-      const decoded = jwtService.verifyAccessToken(token);
-      if (decoded && decoded.id) {
-        websocketService.registerUserSocket(socket, decoded.id);
-        logger.info(`✅ Socket ${socket.id} autenticado para usuário ${decoded.id}`);
-      } else {
-        logger.warn(`⚠️ Token inválido para socket ${socket.id}`);
-      }
-    } else {
-      logger.warn(`⚠️ Nenhum token fornecido para socket ${socket.id}`);
-    }
-  } catch (error) {
-    logger.warn(`⚠️ Erro ao autenticar socket ${socket.id}:`, error);
+    // Inscrever socket na sala do usuário para conseguir emissões direcionadas
+    socket.join(`user-${socket.data.userId}`);
+    logger.info(`✅ Socket ${socket.id} registrado para usuário ${socket.data.userId} e inscrito na sala user-${socket.data.userId}`);
   }
 
   socket.on('disconnect', () => {
