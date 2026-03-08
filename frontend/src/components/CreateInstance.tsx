@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { fetchAPI } from '@/config/api';
 import { Plus, Loader2, AlertCircle, QrCode } from 'lucide-react';
-import { io, Socket } from 'socket.io-client';
+import { Socket } from 'socket.io-client';
+import { initSocket, getSocket, waitForSocketConnection } from '@/utils/socketClient';
 
 interface CreateInstanceProps {
   onSuccess?: () => void;
@@ -24,25 +25,62 @@ const CreateInstance: React.FC<CreateInstanceProps> = ({ onSuccess }) => {
   const [connectedMessage, setConnectedMessage] = useState('');
   const [qrAttempts, setQrAttempts] = useState(0);
 
-  // Conectar ao Socket.IO
+  // Conectar ao Socket.IO (reutilizando singleton)
   useEffect(() => {
-    const newSocket = io('http://localhost:3001', {
-      transports: ['websocket', 'polling'],
-      reconnection: true,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      reconnectionAttempts: 5
-    });
+    const setupSocket = async () => {
+      try {
+        const token = localStorage.getItem('token') || sessionStorage.getItem('token');
+        
+        if (!token) {
+          console.warn('⚠️ Token não encontrado no armazenamento local');
+          return;
+        }
 
-    newSocket.on('connect', () => {
-      console.log('✅ Socket.IO conectado:', newSocket.id);
-    });
+        console.log('🔌 Inicializando/Reutilizando Socket.IO...');
+        
+        // Inicializar ou reutilizar socket singleton
+        const connectedSocket = initSocket(token);
+        setSocket(connectedSocket);
 
-    newSocket.on('connect_error', (error) => {
-      console.error('❌ Socket.IO connection error:', error);
-    });
+        // Se ainda não está conectado, aguardar
+        if (!connectedSocket.connected) {
+          console.log('⏳ Socket não conectado. Aguardando...');
+          try {
+            await waitForSocketConnection();
+            console.log('✅ Socket conectado com sucesso');
+          } catch (err) {
+            console.error('❌ Timeout aguardando socket:', err);
+          }
+        } else {
+          console.log('✅ Socket.IO já estava conectado:', connectedSocket.id);
+        }
 
-    newSocket.on('qr_update', (data: any) => {
+        // Registrar socket no backend
+        connectedSocket.emit('register_socket', { socketId: connectedSocket.id });
+        console.log('📤 Emitindo register_socket ao backend:', connectedSocket.id);
+      } catch (err) {
+        console.error('❌ Erro ao configurar socket:', err);
+      }
+    };
+
+    setupSocket();
+
+    return () => {
+      // Não desconectar aqui - o socket é singleton e pode ser usado em outros componentes
+      // Se precisar desconectar, fazer em um logout ou app cleanup
+    };
+  }, []);
+
+  // Registrar listeners de Socket.IO para eventos de QR e instância
+  useEffect(() => {
+    if (!socket) {
+      console.warn('⚠️ Socket não disponível para registrar listeners');
+      return;
+    }
+
+    console.log('📡 Registrando listeners Socket.IO...');
+
+    const handleQRUpdate = (data: any) => {
       console.log('📱 QR Code recebido (completo):', JSON.stringify(data, null, 2));
       console.log('📱 data.qrCode type:', typeof data.qrCode);
       setQrAttempts(prev => prev + 1);
@@ -80,9 +118,9 @@ const CreateInstance: React.FC<CreateInstanceProps> = ({ onSuccess }) => {
         setError('⏰ Timeout ao aguardar QR Code. Tente novamente.');
         setQRLoading(false);
       }
-    });
+    };
 
-    newSocket.on('whatsapp_connected', (data: any) => {
+    const handleWhatsAppConnected = (data: any) => {
       console.log('🎉 WhatsApp conectado!', data);
       setConnectedMessage(`✅ Instância conectada! (ID: ${data.instanceId || data.instanceName})`);
       setQRCode(null);
@@ -97,26 +135,35 @@ const CreateInstance: React.FC<CreateInstanceProps> = ({ onSuccess }) => {
           }, 1500);
         }
       }, 2000);
-    });
+    };
 
-    newSocket.on('qr_timeout', (data: any) => {
+    const handleQRTimeout = (data: any) => {
       console.warn('⏰ QR Code expirou:', data);
       setError('⏰ QR Code expirou. Clique em "Cancelar" e tente novamente.');
       setQRLoading(false);
-    });
+    };
 
-    newSocket.on('instance_error', (data: any) => {
+    const handleInstanceError = (data: any) => {
       console.error('❌ Erro na instância:', data);
       setError(`Erro: ${data.error}`);
       setQRLoading(false);
-    });
-
-    setSocket(newSocket);
-
-    return () => {
-      newSocket.disconnect();
     };
-  }, []);
+
+    // Registrar listeners
+    socket.on('qr_update', handleQRUpdate);
+    socket.on('whatsapp_connected', handleWhatsAppConnected);
+    socket.on('qr_timeout', handleQRTimeout);
+    socket.on('instance_error', handleInstanceError);
+
+    // Cleanup: remover listeners quando desmontar ou socket mudar
+    return () => {
+      socket.off('qr_update', handleQRUpdate);
+      socket.off('whatsapp_connected', handleWhatsAppConnected);
+      socket.off('qr_timeout', handleQRTimeout);
+      socket.off('instance_error', handleInstanceError);
+    };
+  }, [socket, onSuccess]);
+
 
   const handleCreateInstance = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -148,12 +195,47 @@ const CreateInstance: React.FC<CreateInstanceProps> = ({ onSuccess }) => {
         }
       });
 
-      console.log('✅ Instância criada, aguardando QR Code...', instance);
+      console.log('✅ Instância criada:', instance);
+      const instanceId = instance.id;
+
+      // AGORA chama POST /instances/:id/connect para obter o QR Code
+      console.log(`🔗 Chamando POST /instances/${instanceId}/connect...`);
+      const connectResponse = await fetchAPI(`/instances/${instanceId}/connect`, {
+        method: 'POST'
+      });
+
+      console.log('📱 Resposta do connect:', JSON.stringify(connectResponse, null, 2));
+
+      // Extrair QR Code da resposta - pode estar em vários formatos
+      let qrCodeBase64: string | null = null;
       
-      // Não chamar onSuccess aqui - aguardar evento Socket.IO 'whatsapp_connected'
+      if (connectResponse?.qrCode) {
+        qrCodeBase64 = connectResponse.qrCode;
+        console.log('✅ QR Code obtido de connectResponse.qrCode');
+      } else if (connectResponse?.base64) {
+        qrCodeBase64 = connectResponse.base64;
+        console.log('✅ QR Code obtido de connectResponse.base64');
+      } else if (connectResponse?.data?.base64) {
+        qrCodeBase64 = connectResponse.data.base64;
+        console.log('✅ QR Code obtido de connectResponse.data.base64');
+      } else {
+        console.warn('⚠️ QR Code não encontrado na resposta:', connectResponse);
+      }
+
+      if (qrCodeBase64) {
+        // Normalizar para data URL se necessário
+        const finalQR = qrCodeBase64.startsWith('data:image')
+          ? qrCodeBase64
+          : `data:image/png;base64,${qrCodeBase64}`;
+        
+        console.log('✅ QR Code normalizado, exibindo na tela');
+        setQRCode(finalQR);
+      } else {
+        console.warn('⚠️ Sem QR Code na resposta, aguardando via Socket.IO...');
+      }
       
     } catch (error: any) {
-      console.error('Erro ao criar instância:', error);
+      console.error('❌ Erro ao criar instância:', error);
       
       // Melhorar mensagem de erro para limite de instâncias
       if (error.message && error.message.includes('Máximo')) {

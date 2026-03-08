@@ -1,0 +1,123 @@
+## ✅ FIX COMPLETO: QR CODE NÃO MOSTRA NO FRONTEND
+
+### PROBLEMA IDENTIFICADO
+O CreateInstance.tsx criava a instância com POST `/instances` mas **NÃO** chamava o endpoint POST `/instances/:id/connect` que retorna o QR Code da Evolution API.
+
+### MUDANÇAS IMPLEMENTADAS
+
+#### 1. frontend/src/components/CreateInstance.tsx - handleCreateInstance()
+
+**ANTES:**
+```typescript
+const instance = await fetchAPI('/instances', {
+  method: 'POST',
+  body: { name, accountAge },
+  headers: { 'x-socket-id': socketId }
+});
+
+console.log('✅ Instância criada, aguardando QR Code...', instance);
+// Não chamar onSuccess aqui - aguardar evento Socket.IO 'whatsapp_connected'
+```
+
+**DEPOIS:**
+```typescript
+const instance = await fetchAPI('/instances', {
+  method: 'POST',
+  body: { name, accountAge },
+  headers: { 'x-socket-id': socketId }
+});
+
+console.log('✅ Instância criada:', instance);
+const instanceId = instance.id;
+
+// AGORA chama POST /instances/:id/connect para obter o QR Code
+console.log(`🔗 Chamando POST /instances/${instanceId}/connect...`);
+const connectResponse = await fetchAPI(`/instances/${instanceId}/connect`, {
+  method: 'POST'
+});
+
+console.log('📱 Resposta do connect:', JSON.stringify(connectResponse, null, 2));
+
+// Extrair QR Code da resposta - pode estar em vários formatos
+let qrCodeBase64: string | null = null;
+
+if (connectResponse?.qrCode) {
+  qrCodeBase64 = connectResponse.qrCode;
+  console.log('✅ QR Code obtido de connectResponse.qrCode');
+} else if (connectResponse?.base64) {
+  qrCodeBase64 = connectResponse.base64;
+  console.log('✅ QR Code obtido de connectResponse.base64');
+} else if (connectResponse?.data?.base64) {
+  qrCodeBase64 = connectResponse.data.base64;
+  console.log('✅ QR Code obtido de connectResponse.data.base64');
+} else {
+  console.warn('⚠️ QR Code não encontrado na resposta:', connectResponse);
+}
+
+if (qrCodeBase64) {
+  // Normalizar para data URL se necessário
+  const finalQR = qrCodeBase64.startsWith('data:image')
+    ? qrCodeBase64
+    : `data:image/png;base64,${qrCodeBase64}`;
+  
+  console.log('✅ QR Code normalizado, exibindo na tela');
+  setQRCode(finalQR);
+} else {
+  console.warn('⚠️ Sem QR Code na resposta, aguardando via Socket.IO...');
+}
+```
+
+### FLUXO CORRIGIDO
+
+```
+1. Frontend: POST /instances (criar)
+   ↓
+2. Backend: Cria instância e responde com { id: 123, name: "..." }
+   ↓
+3. Frontend: POST /instances/123/connect (conectar)
+   ↓
+4. Backend:
+   - Chama whatsappService.connect(123) [background]
+   - Aguarda 2s pelo QR Code ser gerado
+   - Busca qrCode do banco
+   - Retorna { success: true, qrCode: "data:image/png;base64,..." }
+   ↓
+5. Frontend: 
+   - Extrai connectResponse.qrCode
+   - Normaliza para data URL
+   - setQRCode(finalQR)
+   ↓
+6. Renderiza: <img src={qrCode} ... />
+```
+
+### COMPONENTES ENVOLVIDOS
+
+✅ **frontend/src/components/CreateInstance.tsx**
+- handleCreateInstance() agora chama POST /instances/:id/connect
+- Extrai qrCode da resposta
+- setQRCode() com o base64
+- Renderiza <img src={qrCode} /> quando qrLoading && qrCode
+
+✅ **backend/src/routes/instances.ts**
+- POST /:id/connect retorna { success: true, qrCode: "base64..." }
+- Aguarda 2s pelo polling salvar QR no banco
+- Busca updated instance e retorna qrCode
+
+✅ **backend/src/adapters/EvolutionAdapter.ts**
+- getQRCodeFromAPI() salva qrCode no banco
+- Extrai de response.data.base64 (Evolution API real)
+- Normaliza para data:image/png;base64,...
+- Fallback com QR dummy em development
+
+### TESTES
+
+**Esperado:**
+- Clica "Criar Instância"
+- Vê "⏳ Gerando QR Code..." por ~2s
+- QR Code PNG aparece na tela
+- Console mostra: "✅ QR Code obtido de connectResponse.qrCode"
+
+**Se quebrado:**
+- QR não aparece → F12 → Console mostra onde falhou
+- "QR Code não encontrado na resposta" → backend não está retornando qrCode
+- "base64 puro" → frontend não está normalizando corretamente

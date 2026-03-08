@@ -10,6 +10,11 @@ const url = require('url');
 // Store instances in memory
 const instances = new Map();
 
+/**
+ * Mock Evolution API - APENAS para health check e estrutura básica.
+ * QR Code: Use Evolution API REAL (Docker). Este mock NÃO gera QR escaneável.
+ */
+
 const server = http.createServer((req, res) => {
   // CORS headers
   res.setHeader('Content-Type', 'application/json');
@@ -59,17 +64,13 @@ const server = http.createServer((req, res) => {
             status: 'connecting',
             createdAt: new Date()
           });
-          
+
           res.writeHead(201);
           res.end(JSON.stringify({
             instance: {
               instanceName: instanceName,
               instanceId: Math.random().toString(36).substr(2, 9),
-              qrcode: {
-                code: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAADCAQAAABIeIiRAAAA==',
-                base64: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAADCAQAAABIeIiRAAAA==',
-                url: 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=test_qr'
-              },
+              qrcode: null,
               status: 'connecting',
               statusConnection: 'connecting'
             }
@@ -81,17 +82,13 @@ const server = http.createServer((req, res) => {
       });
     }
     
-    // GET request
+    // GET request - create simulado
     res.writeHead(201);
     res.end(JSON.stringify({
       instance: {
         instanceName: instanceName,
         instanceId: Math.random().toString(36).substr(2, 9),
-        qrcode: {
-          code: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAADCAQAAABIeIiRAAAA==',
-          base64: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAADCAQAAABIeIiRAAAA==',
-          url: 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=example'
-        },
+        qrcode: null,
         status: 'connecting',
         statusConnection: 'connecting'
       }
@@ -131,32 +128,29 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Get QR Code (múltiplos endpoints suportados)
-  if (pathname.match(/^\/instance\/(.+?)\/(qrcode|connect)\/?$/) && req.method === 'GET') {
-    const instanceName = pathname.split('/')[2];
-    
-    res.writeHead(200);
+  // Get QR Code - mock NÃO gera QR real
+  if (pathname.match(/^\/instance\/connect\/(.+?)\/?$/) && req.method === 'GET') {
+    res.writeHead(503);
     res.end(JSON.stringify({
-      qrcode: {
-        code: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAADCAQAAABIeIiRAAAA==',
-        base64: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAADCAQAAABIeIiRAAAA==',
-        url: 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=example'
-      },
-      qr: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAADCAQAAABIeIiRAAAA==',
-      base64: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAADCAQAAABIeIiRAAAA==',
-      status: 'connecting',
-      statusConnection: 'connecting'
+      error: 'QR_CODE_REQUIRES_REAL_EVOLUTION_API',
+      message: 'Use Evolution API real (Docker) para QR Code escaneável.'
+    }));
+    return;
+  }
+  if (pathname.match(/^\/instance\/(.+?)\/(qrcode|connect)\/?$/) && req.method === 'GET') {
+    res.writeHead(503);
+    res.end(JSON.stringify({
+      error: 'QR_CODE_REQUIRES_REAL_EVOLUTION_API',
+      message: 'Use Evolution API real (Docker) para QR Code escaneável.'
     }));
     return;
   }
 
-  // Get alternative QR Code endpoints
   if (pathname.match(/^\/qrcode\/(.+?)\/?$/) && req.method === 'GET') {
-    res.writeHead(200);
+    res.writeHead(503);
     res.end(JSON.stringify({
-      qrcode: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAADCAQAAABIeIiRAAAA==',
-      qr: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAADCAQAAABIeIiRAAAA==',
-      base64: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAADCAQAAABIeIiRAAAA=='
+      error: 'QR_CODE_REQUIRES_REAL_EVOLUTION_API',
+      message: 'Use Evolution API real (Docker) para QR Code escaneável.'
     }));
     return;
   }

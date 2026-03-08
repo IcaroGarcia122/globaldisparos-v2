@@ -1,12 +1,5 @@
 /**
- * ✨ EVOLUTION SERVICE - Serviço completo para gerenciar WhatsApp via Evolution API
- * 
- * Responsabilidades:
- * - Criar e gerenciar instâncias WhatsApp
- * - Gerar e obter QR codes
- * - Listar grupos e participantes
- * - Enviar mensagens em massa
- * - Sincronizar status e metadados
+ * EVOLUTION SERVICE - Serviço completo para gerenciar WhatsApp via Evolution API
  */
 
 import axios, { AxiosInstance, AxiosError } from 'axios';
@@ -56,37 +49,35 @@ class EvolutionService {
   private apiKey: string;
 
   constructor() {
-    this.evolutionUrl = process.env.EVOLUTION_API_URL || 'http://localhost:8081';
-    this.apiKey = process.env.EVOLUTION_API_KEY || 'sua_chave_aqui';
+    // CRÍTICO: usar 127.0.0.1 ao invés de localhost (Node 18+ resolve como IPv6)
+    this.evolutionUrl = (process.env.EVOLUTION_API_URL || 'http://127.0.0.1:8081')
+      .replace('localhost', '127.0.0.1');
+    this.apiKey = process.env.EVOLUTION_API_KEY || '';
 
-    // Criar cliente HTTP com configurações de timeout e retry
     this.client = axios.create({
       baseURL: this.evolutionUrl,
       headers: {
         'Content-Type': 'application/json',
-        'apikey': this.apiKey
+        'apikey': this.apiKey   // apikey APENAS no header, nunca no body
       },
       timeout: 30000
     });
 
-    // Interceptor para logging
     this.client.interceptors.request.use(
       (config) => {
         logger.debug(`[EvolutionAPI] ${config.method?.toUpperCase()} ${config.url}`);
         return config;
       },
-      (error) => {
-        logger.error('[EvolutionAPI] Request error:', error.message);
-        return Promise.reject(error);
-      }
+      (error) => Promise.reject(error)
     );
 
     this.client.interceptors.response.use(
       (response) => response,
       (error: AxiosError) => {
-        logger.error('[EvolutionAPI] Response error:', {
+        logger.error('[EvolutionAPI] Erro:', {
           url: error.config?.url,
           status: error.response?.status,
+          data: error.response?.data,
           message: error.message
         });
         return Promise.reject(error);
@@ -104,6 +95,7 @@ class EvolutionService {
 
   /**
    * Criar uma nova instância WhatsApp
+   * CORREÇÃO: integration deve ser 'WHATSAPP-BAILEYS', sem token no body
    */
   async createInstance(instanceName: string): Promise<any> {
     try {
@@ -111,173 +103,113 @@ class EvolutionService {
 
       const response = await this.client.post('/instance/create', {
         instanceName,
-        token: this.apiKey,
         qrcode: true,
-        number: '',
-        integration: 'BAILEYS' // Usar Baileys como integration padrão
+        integration: 'WHATSAPP-BAILEYS'  // ✅ CORRETO (era 'BAILEYS' - errado)
+        // ❌ REMOVIDO: token no body causava erro 400
       });
 
       logger.info(`✅ Instância criada: ${instanceName}`);
       return response.data;
     } catch (error: any) {
-      logger.error(`❌ Erro ao criar instância: ${error.message}`);
-      throw error;
-    }
-  }
+      const status = error.response?.status;
+      const data = error.response?.data;
 
-  /**
-   * Conectar uma instância (iniciar o cliente Baileys)
-   */
-  async connectInstance(instanceName: string): Promise<any> {
-    try {
-      logger.info(`🔗 Conectando instância: ${instanceName}`);
-
-      const response = await this.client.get(`/instance/connect/${instanceName}`);
-
-      logger.info(`✅ Instância conectada: ${instanceName}`);
-      return response.data;
-    } catch (error: any) {
-      logger.error(`❌ Erro ao conectar instância: ${error.message}`);
-      throw error;
-    }
-  }
-
-  /**
-   * Obter QR code para escanear
-   */
-  async getQRCode(instanceName: string): Promise<string> {
-    try {
-      logger.debug(`📱 Obtendo QR Code: ${instanceName}`);
-
-      // Tentar múltiplos endpoints possíveis
-      const endpoints = [
-        `/instance/connect/${instanceName}`,      // ✅ CORRETO - rota oficial Evolution API
-        `/instance/${instanceName}/qrcode`,        // fallback
-        `/instance/qrcode/${instanceName}`,        // fallback
-        `/qrcode/${instanceName}`,                 // fallback
-      ];
-
-      for (const endpoint of endpoints) {
-        try {
-          console.log(`[QR-SERVICE] Testando endpoint: ${endpoint}`);
-          const response = await this.client.get(endpoint);
-          
-          // Extrair a string base64 em qualquer formato que a Evolution retorne
-          let qrCode: string | null = null;
-          
-          // Se for string direto
-          if (typeof response.data?.qr === 'string') {
-            qrCode = response.data.qr;
-            console.log(`[QR-SERVICE] Encontrado em response.data.qr, length: ${qrCode.length}`);
-          } else if (typeof response.data?.base64 === 'string') {
-            qrCode = response.data.base64;
-            console.log(`[QR-SERVICE] Encontrado em response.data.base64, length: ${qrCode.length}`);
-          } else if (typeof response.data?.code === 'string') {
-            qrCode = response.data.code;
-            console.log(`[QR-SERVICE] Encontrado em response.data.code, length: ${qrCode.length}`);
-          }
-          // Se for objeto com .base64 dentro
-          else if (response.data?.qrcode?.base64 && typeof response.data.qrcode.base64 === 'string') {
-            qrCode = response.data.qrcode.base64;
-            console.log(`[QR-SERVICE] Encontrado em response.data.qrcode.base64, length: ${qrCode.length}`);
-          } else if (response.data?.qrcode?.code && typeof response.data.qrcode.code === 'string') {
-            qrCode = response.data.qrcode.code;
-            console.log(`[QR-SERVICE] Encontrado em response.data.qrcode.code, length: ${qrCode.length}`);
-          }
-          // Se a propriedade existe mas é um objeto puro, tenta extrair dela
-          else if (typeof response.data?.qrcode === 'object' && response.data.qrcode !== null) {
-            const obj = response.data.qrcode as any;
-            qrCode = obj.base64 || obj.code || obj.qr || null;
-            if (qrCode) console.log(`[QR-SERVICE] Extraído de objeto, length: ${qrCode.length}`);
-          }
-
-          if (qrCode && typeof qrCode === 'string' && qrCode.length > 100) {
-            logger.info(`✅ QR Code obtido de: ${endpoint} (${qrCode.length} chars)`);
-            return qrCode;
-          }
-        } catch (err) {
-          logger.debug(`⊘ Endpoint ${endpoint} não disponível`);
-        }
+      // 409 = já existe, não é erro real
+      if (status === 409) {
+        logger.info(`ℹ️ Instância ${instanceName} já existe na Evolution API`);
+        return { instanceName, alreadyExists: true };
       }
 
-      throw new Error(`Nenhum endpoint de QR Code disponível`);
-    } catch (error: any) {
-      logger.error(`❌ Erro ao obter QR Code: ${error.message}`);
+      logger.error(`❌ Erro ao criar instância ${instanceName}:`, {
+        status,
+        data,
+        message: error.message
+      });
       throw error;
     }
   }
 
   /**
-   * Obter status da conexão
+   * Buscar QR Code real da Evolution API
+   * CORREÇÃO: rota correta é /instance/connect/{name}
    */
-  async getInstanceStatus(instanceName: string): Promise<any> {
+  async fetchQRCode(instanceName: string): Promise<string | null> {
+    // Rota oficial e correta da Evolution API
+    const endpoint = `/instance/connect/${instanceName}`;
+
     try {
-      const response = await this.client.get(`/instance/connectionState/${instanceName}`);
-      return response.data;
+      logger.debug(`📱 Obtendo QR Code: ${instanceName}`);
+      const response = await this.client.get(endpoint);
+      const data = response.data;
+
+      logger.info(`✅ QR Code obtido de: ${endpoint}`);
+
+      // Extrai base64 nos formatos possíveis da Evolution API
+      let qrCode: string | null =
+        data?.base64 ||
+        data?.qrcode?.base64 ||
+        data?.qr?.base64 ||
+        data?.instance?.qrcode?.base64 ||
+        data?.instance?.qr?.base64 ||
+        null;
+
+      if (!qrCode || typeof qrCode !== 'string') {
+        logger.warn(`⚠️ QR Code não encontrado na resposta de ${endpoint}`);
+        logger.debug('Resposta completa:', JSON.stringify(data));
+        return null;
+      }
+
+      // Validação: QR real tem mais de 1000 caracteres
+      // e NÃO contém = no meio (apenas no final)
+      const hasEqualInMiddle = /=(?!={0,1}$)/.test(qrCode.replace(/^data:image[^,]+,/, ''));
+      if (qrCode.length < 1000 || hasEqualInMiddle) {
+        logger.warn(`⚠️ QR Code inválido ou fake (length: ${qrCode.length})`);
+        return null;
+      }
+
+      // Normaliza para data URL
+      if (!qrCode.startsWith('data:image')) {
+        qrCode = `data:image/png;base64,${qrCode}`;
+      }
+
+      logger.info(`✅ QR Code válido: ${qrCode.length} chars`);
+      return qrCode;
+
     } catch (error: any) {
-      logger.error(`❌ Erro ao obter status: ${error.message}`);
-      throw error;
+      logger.error(`❌ Erro ao buscar QR de ${endpoint}:`, error.message);
+      return null;
     }
   }
 
   /**
-   * Listar todas as instâncias
-   */
-  async listInstances(): Promise<any[]> {
-    try {
-      const response = await this.client.get('/instance/fetchInstances');
-      const instances = response.data?.instances || [];
-      
-      logger.info(`✅ ${instances.length} instâncias listadas`);
-      return instances;
-    } catch (error: any) {
-      logger.error(`❌ Erro ao listar instâncias: ${error.message}`);
-      return [];
-    }
-  }
-
-  /**
-   * Deletar uma instância
-   */
-  async deleteInstance(instanceName: string): Promise<any> {
-    try {
-      logger.info(`🗑️  Deletando instância: ${instanceName}`);
-
-      const response = await this.client.delete(`/instance/delete/${instanceName}`);
-
-      logger.info(`✅ Instância deletada: ${instanceName}`);
-      return response.data;
-    } catch (error: any) {
-      logger.error(`❌ Erro ao deletar instância: ${error.message}`);
-      throw error;
-    }
-  }
-
-  /**
-   * Obter estado da conexão (para polling do QR Code)
+   * Verificar estado da conexão
    */
   async getConnectionState(instanceName: string): Promise<string | null> {
     try {
-      const response = await this.client.get(`/instance/connectionState/${instanceName}`);
+      const response = await this.client.get(
+        `/instance/connectionState/${instanceName}`
+      );
       const state = response.data?.instance?.state || response.data?.state;
       logger.debug(`[Connection] ${instanceName} -> ${state}`);
       return state;
     } catch (error: any) {
-      logger.debug(`[Connection] Erro ao verificar: ${error.message}`);
+      logger.error(`❌ Erro ao verificar estado de ${instanceName}:`, error.message);
       return null;
     }
   }
 
   /**
-   * Buscar QR Code (método isolado)
+   * Deletar instância
    */
-  async fetchQRCode(instanceName: string): Promise<string | null> {
+  async deleteInstance(instanceName: string): Promise<any> {
     try {
-      const qrCode = await this.getQRCode(instanceName);
-      return qrCode;
+      logger.info(`🗑️ Deletando instância: ${instanceName}`);
+      const response = await this.client.delete(`/instance/delete/${instanceName}`);
+      logger.info(`✅ Instância deletada: ${instanceName}`);
+      return response.data;
     } catch (error: any) {
-      logger.debug(`[QRCode] Erro: ${error.message}`);
-      return null;
+      logger.error(`❌ Erro ao deletar instância ${instanceName}:`, error.message);
+      throw error;
     }
   }
 
@@ -286,117 +218,86 @@ class EvolutionService {
   // ====================================
 
   /**
-   * Obter lista de grupos da instância
+   * Listar grupos da instância
    */
-  async getGroups(instanceName: string): Promise<GroupData[]> {
+  async listGroups(instanceName: string): Promise<GroupData[]> {
     try {
-      logger.info(`📋 Buscando grupos: ${instanceName}`);
+      logger.info(`📋 Listando grupos: ${instanceName}`);
+      const response = await this.client.get(
+        `/group/fetchAllGroups/${instanceName}?getParticipants=false`
+      );
 
-      // Tentar múltiplos endpoints possíveis
-      const endpoints = [
-        `/group/fetchAllGroups/${instanceName}`,
-        `/group/list/${instanceName}`,
-        `/chat/findChats/${instanceName}?type=group`,
-        `/chats/${instanceName}?filter=group`
-      ];
+      const groups = Array.isArray(response.data) ? response.data : [];
+      logger.info(`✅ ${groups.length} grupos encontrados`);
 
-      for (const endpoint of endpoints) {
-        try {
-          const response = await this.client.get(endpoint);
-          
-          const groups = Array.isArray(response.data)
-            ? response.data
-            : response.data?.groups || response.data?.chats || response.data;
-
-          if (Array.isArray(groups) && groups.length > 0) {
-            logger.info(`✅ ${groups.length} grupos obtidos de: ${endpoint}`);
-            return this.normalizeGroups(groups);
-          }
-        } catch (err) {
-          logger.debug(`⊘ Endpoint ${endpoint} não disponível`);
-        }
-      }
-
-      logger.warn(`⚠️  Nenhum grupo encontrado para ${instanceName}`);
-      return [];
+      return groups.map((g: any) => ({
+        id: g.id,
+        name: g.subject || g.name || 'Sem nome',
+        description: g.desc || g.description,
+        participants: g.size || g.participants?.length || 0,
+        isAdmin: g.isAdmin || false,
+      }));
     } catch (error: any) {
-      logger.error(`❌ Erro ao obter grupos: ${error.message}`);
-      throw error;
+      logger.error(`❌ Erro ao listar grupos de ${instanceName}:`, error.message);
+      return [];
     }
   }
 
   /**
-   * Normalizar dados dos grupos para formato padrão
+   * Listar participantes de um grupo
    */
-  private normalizeGroups(groups: any[]): GroupData[] {
-    return groups
-      .filter(g => !g.isUser && !g.isBroadcast) // Filtrar apenas grupos
-      .map(g => ({
-        id: g.id || g.jid || g.groupJid,
-        name: g.name || g.subject || 'Grupo Sem Nome',
-        description: g.description || g.subject,
-        participants: g.participants?.length || 0,
-        isAdmin: g.isAdmin || false,
-        isBroadcast: g.isBroadcast || false,
-        profileImage: g.profileImage || g.image
-      }));
-  }
-
-  /**
-   * Obter participantes de um grupo
-   */
-  async getGroupParticipants(
+  async listGroupParticipants(
     instanceName: string,
     groupId: string
   ): Promise<ParticipantData[]> {
     try {
-      logger.info(`👥 Buscando participantes do grupo: ${groupId}`);
+      logger.info(`👥 Listando participantes do grupo ${groupId}`);
+      const response = await this.client.get(
+        `/group/participants/${instanceName}?groupJid=${groupId}`
+      );
 
-      const endpoints = [
-        `/group/participants/${instanceName}`,
-        `/group/${groupId}/participants/${instanceName}`,
-        `/chat/${groupId}/participants/${instanceName}`
-      ];
+      const participants = response.data?.participants || response.data || [];
+      logger.info(`✅ ${participants.length} participantes encontrados`);
 
-      for (const endpoint of endpoints) {
-        try {
-          const response = await this.client.get(endpoint, {
-            params: { groupJid: groupId }
-          });
-
-          const participants = Array.isArray(response.data)
-            ? response.data
-            : response.data?.participants || response.data;
-
-          if (Array.isArray(participants) && participants.length > 0) {
-            logger.info(`✅ ${participants.length} participantes obtidos`);
-            return this.normalizeParticipants(participants);
-          }
-        } catch (err) {
-          logger.debug(`⊘ Endpoint ${endpoint} não disponível`);
-        }
-      }
-
-      logger.warn(`⚠️  Nenhum participante encontrado`);
-      return [];
+      return participants.map((p: any) => ({
+        id: p.id,
+        number: p.id.replace('@s.whatsapp.net', '').replace('@g.us', ''),
+        name: p.pushName || p.name || '',
+        isAdmin: p.admin === 'admin' || p.admin === 'superadmin',
+        isSuperAdmin: p.admin === 'superadmin',
+      }));
     } catch (error: any) {
-      logger.error(`❌ Erro ao obter participantes: ${error.message}`);
-      throw error;
+      logger.error(`❌ Erro ao listar participantes:`, error.message);
+      return [];
     }
   }
 
   /**
-   * Normalizar dados de participantes
+   * Adicionar membros a um grupo com delay
    */
-  private normalizeParticipants(participants: any[]): ParticipantData[] {
-    return participants.map(p => ({
-      id: p.id || p.jid || p.number,
-      name: p.name || p.displayName || p.notify || 'Sem Nome',
-      number: (p.number || p.jid || '').replace(/\D/g, ''),
-      isAdmin: p.isAdmin || false,
-      isSuperAdmin: p.isSuperAdmin || false,
-      profileImage: p.profileImage || p.image
-    }));
+  async addGroupMembers(
+    instanceName: string,
+    groupId: string,
+    phoneNumbers: string[]
+  ): Promise<any> {
+    try {
+      logger.info(`👥 Adicionando ${phoneNumbers.length} membros ao grupo`);
+
+      const response = await this.client.post(
+        `/group/updateParticipant/${instanceName}`,
+        {
+          groupJid: groupId,
+          action: 'add',
+          participants: phoneNumbers.map(n => `${n}@s.whatsapp.net`)
+        }
+      );
+
+      logger.info(`✅ Membros adicionados ao grupo ${groupId}`);
+      return response.data;
+    } catch (error: any) {
+      logger.error(`❌ Erro ao adicionar membros:`, error.message);
+      throw error;
+    }
   }
 
   // ====================================
@@ -406,103 +307,58 @@ class EvolutionService {
   /**
    * Enviar mensagem de texto
    */
-  async sendMessage(
+  async sendTextMessage(
     instanceName: string,
-    phoneNumber: string,
-    message: string
+    number: string,
+    text: string
   ): Promise<any> {
     try {
-      logger.debug(`📧 Enviando mensagem para ${phoneNumber}`);
-
-      const phoneNormalized = phoneNumber.replace(/\D/g, '');
-
       const response = await this.client.post(
         `/message/sendText/${instanceName}`,
         {
-          number: phoneNormalized,
-          text: message
+          number: number.replace(/\D/g, ''),
+          text
         }
       );
-
-      logger.info(`✅ Mensagem enviada para ${phoneNumber}`);
       return response.data;
     } catch (error: any) {
-      logger.error(`❌ Erro ao enviar mensagem: ${error.message}`);
+      logger.error(`❌ Erro ao enviar mensagem para ${number}:`, error.message);
       throw error;
     }
   }
 
   /**
-   * Enviar mensagens em massa com intervalo
+   * Enviar mensagens em massa com progresso
    */
   async sendBulkMessages(
     instanceName: string,
     contacts: ContactData[],
-    messageTemplate: string,
+    message: string,
     options: BulkMessageOptions = {}
-  ): Promise<any[]> {
-    const {
-      interval = 3000,
-      onProgress,
-      retryFailed = false
-    } = options;
+  ): Promise<{ success: number; failed: number; total: number }> {
+    const { interval = 3000, onProgress } = options;
+    let success = 0;
+    let failed = 0;
+    const total = contacts.length;
 
-    const results: any[] = [];
-    const failed: ContactData[] = [];
+    logger.info(`📨 Iniciando disparo para ${total} contatos`);
 
-    for (let i = 0; i < contacts.length; i++) {
-      const contact = contacts[i];
-      
+    for (const contact of contacts) {
       try {
-        // Personalizar mensagem com dados do contato
-        const personalizedMessage = messageTemplate
-          .replace(/{nome}/g, contact.name || contact.number)
-          .replace(/{numero}/g, contact.number)
-          .replace(/{email}/g, contact.email || '');
+        await this.sendTextMessage(instanceName, contact.number, message);
+        success++;
 
-        // Enviar mensagem
-        const result = await this.sendMessage(
-          instanceName,
-          contact.number,
-          personalizedMessage
-        );
-
-        results.push({
-          contact,
-          success: true,
-          result,
-          sentAt: new Date()
-        });
-
-        // Progress callback
         if (onProgress) {
-          await onProgress({
-            current: i + 1,
-            total: contacts.length,
-            contact,
-            success: true
-          });
+          await onProgress({ current: success + failed, total, contact, success: true });
         }
-
-        logger.debug(`✅ [${i + 1}/${contacts.length}] Enviado para ${contact.number}`);
-
       } catch (error: any) {
-        logger.warn(`❌ [${i + 1}/${contacts.length}] Erro para ${contact.number}: ${error.message}`);
-        
-        results.push({
-          contact,
-          success: false,
-          error: error.message,
-          sentAt: new Date()
-        });
+        failed++;
+        logger.error(`❌ Erro ao enviar para ${contact.number}:`, error.message);
 
-        failed.push(contact);
-
-        // Progress callback
         if (onProgress) {
           await onProgress({
-            current: i + 1,
-            total: contacts.length,
+            current: success + failed,
+            total,
             contact,
             success: false,
             error: error.message
@@ -510,77 +366,27 @@ class EvolutionService {
         }
       }
 
-      // Aguardar intervalo entre mensagens (anti-ban)
-      if (i < contacts.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, interval));
+      // Delay entre mensagens
+      if (success + failed < total) {
+        await new Promise(r => setTimeout(r, interval));
       }
     }
 
-    // Retry de mensagens falhadas se solicitado
-    if (retryFailed && failed.length > 0) {
-      logger.info(`🔄 Retentar ${failed.length} mensagens falhadas...`);
-      return this.sendBulkMessages(instanceName, failed, messageTemplate, {
-        ...options,
-        retryFailed: false // Evitar loop infinito
-      });
-    }
-
-    const successful = results.filter(r => r.success).length;
-    const unsuccessful = results.filter(r => !r.success).length;
-
-    logger.info(`
-      📊 RESUMO DO DISPARO:
-      ✅ Enviadas: ${successful}
-      ❌ Erro: ${unsuccessful}
-      ⏱️  Total: ${contacts.length}
-      💯 Taxa de sucesso: ${((successful / contacts.length) * 100).toFixed(2)}%
-    `);
-
-    return results;
+    logger.info(`✅ Disparo concluído: ${success} enviadas, ${failed} falhas`);
+    return { success, failed, total };
   }
 
-  // ====================================
-  // UTILITÁRIOS
-  // ====================================
-
   /**
-   * Verificar saúde da Evolution API
+   * Verificar se Evolution API está acessível
    */
   async healthCheck(): Promise<boolean> {
     try {
-      const response = await this.client.get('/', { timeout: 5000 });
-      logger.info('✅ Evolution API respondendo');
+      await this.client.get('/instance/fetchInstances');
       return true;
-    } catch (error) {
-      logger.error('❌ Evolution API não respondendo');
+    } catch {
       return false;
-    }
-  }
-
-  /**
-   * Reconectar todas as instâncias ativas
-   */
-  async reconnectAll(): Promise<void> {
-    try {
-      logger.info('🔄 Reconectando todas as instâncias...');
-      
-      const instances = await WhatsAppInstance.findAll({
-        where: { isActive: true }
-      });
-
-      for (const instance of instances) {
-        try {
-          await this.connectInstance(instance.name);
-          logger.info(`✅ Reconectada: ${instance.name}`);
-        } catch (error) {
-          logger.warn(`⚠️  Erro ao reconectar ${instance.name}`);
-        }
-      }
-    } catch (error: any) {
-      logger.error('❌ Erro ao reconectar instâncias:', error.message);
     }
   }
 }
 
-// Exportar singleton
 export default new EvolutionService();

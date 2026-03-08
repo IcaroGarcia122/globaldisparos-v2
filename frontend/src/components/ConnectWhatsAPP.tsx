@@ -101,6 +101,18 @@ const ConnectWhatsApp: React.FC<ConnectWhatsAppProps> = ({ instanceId, onConnect
       
       console.log('✅ Conexão iniciada, aguardando QR code via WebSocket...', connectResponse);
 
+      // Se a resposta já tem QR code, usa imediatamente
+      if (connectResponse?.qrCode) {
+        console.log(`✅ QR Code retornado imediatamente da resposta POST!`);
+        setQrCode(connectResponse.qrCode);
+        setLoading(false);
+        if (qrPollRef.current) {
+          clearInterval(qrPollRef.current);
+          qrPollRef.current = null;
+        }
+        return;
+      }
+
       // Busca o QR code imediatamente após conexão iniciada
       // (pode não vir imediatamente via WebSocket, então faz fallback com polling)
       let qrAttempts = 0;

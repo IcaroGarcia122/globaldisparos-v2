@@ -1,505 +1,629 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { fetchAPI } from '@/config/api';
-import { 
-  Send, Shield, Clock, Zap, Loader2, AlertCircle, CheckCircle2, Users, 
-  ChevronDown, BarChart3
+import {
+  Send, Loader2, AlertCircle, CheckCircle2, Users, Upload,
+  RefreshCw, X, ChevronDown, ChevronUp, Zap, Shield,
+  BarChart3, Clock, TrendingUp, MessageSquare, AlertTriangle, StopCircle
 } from 'lucide-react';
-import DelayUI from './DelayUI';
 
-interface Group {
-  id: string;
-  name: string;
-  participantsCount: number;  // Match backend response (plural)
-  creation?: number;
+interface Group { id: string; name: string; participantsCount?: number; }
+interface Instance { id: string | number; name: string; phoneNumber?: string; status: string; }
+
+interface DispatchConfig {
+  instanceId: string;
+  groupId: string;
+  sourceType: 'group' | 'xlsx';
+  xlsxNumbers: string[];
+  messages: string[]; // variações de mensagem
+  delayMin: number;
+  delayMax: number;
+  excludeAdmins: boolean;
+  skipAlreadySent: boolean;
+  randomizeOrder: boolean;
 }
 
-interface Instance {
-  id: string;
-  name: string;
-  phoneNumber?: string;
-  status: string;
+interface CampaignMetrics {
+  status: 'idle' | 'loading_participants' | 'running' | 'paused' | 'done' | 'cancelled';
+  total: number;
+  sent: number;
+  failed: number;
+  skipped: number;
+  current: string;
+  startedAt: number;
+  estimatedEnd: number | null;
+  numbers: string[];
+  currentIndex: number;
 }
+
+const DEFAULT_CONFIG: DispatchConfig = {
+  instanceId: '',
+  groupId: '',
+  sourceType: 'group',
+  xlsxNumbers: [],
+  messages: [''],
+  delayMin: 3000,
+  delayMax: 6000,
+  excludeAdmins: false,
+  skipAlreadySent: false,
+  randomizeOrder: false,
+};
 
 const EliteDispatcher: React.FC = () => {
-  // State
-  const [step, setStep] = useState(1);
-  const [name, setName] = useState('');
-  const [message, setMessage] = useState('');
-  const [instanceId, setInstanceId] = useState('');
-  const [groupId, setGroupId] = useState('');
-  
-  const [useAntibanVariations, setUseAntibanVariations] = useState(true);
-  const [useAntibanDelays, setUseAntibanDelays] = useState(true);
-  const [useCommercialHours, setUseCommercialHours] = useState(true);
-  const [excludeAdmins, setExcludeAdmins] = useState(true);
-  const [excludeAlreadySent, setExcludeAlreadySent] = useState(true);
-  const [selectedDelay, setSelectedDelay] = useState('humano');
-  
+  const [config, setConfig] = useState<DispatchConfig>(DEFAULT_CONFIG);
   const [instances, setInstances] = useState<Instance[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
-  const [groupSearchFilter, setGroupSearchFilter] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [dispatching, setDispatching] = useState(false);
+  const [groupSearch, setGroupSearch] = useState('');
+  const [groupsLoading, setGroupsLoading] = useState(false);
+  const [groupsSyncing, setGroupsSyncing] = useState(false);
+  const [xlsxFileName, setXlsxFileName] = useState('');
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [campaign, setCampaign] = useState<CampaignMetrics | null>(null);
 
-  // Carregar instâncias
+  const pollRef = useRef<NodeJS.Timeout | null>(null);
+  const abortRef = useRef(false);
+  const sentNumbersRef = useRef<Set<string>>(new Set());
+
+  // Carrega instâncias conectadas
   useEffect(() => {
-    const loadInstances = async () => {
-      try {
-        const response = await fetchAPI('/instances');
-        // API retorna {instances: [...], pagination: {...}}
-        const instancesArray = response?.instances || response || [];
-        setInstances(Array.isArray(instancesArray) ? instancesArray : []);
-      } catch (err) {
-        console.error('Erro ao carregar instâncias:', err);
-        setError('Erro ao carregar instâncias');
-        setInstances([]);
-      }
-    };
-
-    loadInstances();
+    fetchAPI('/instances').then(data => {
+      const list = data?.data || data || [];
+      const connected = list.filter((i: Instance) => i.status === 'connected');
+      setInstances(connected);
+      if (connected.length === 1) setConfig(c => ({ ...c, instanceId: String(connected[0].id) }));
+    }).catch(() => {});
   }, []);
 
-  // Carregar grupos quando instância mudar
+  // Carrega grupos ao mudar instância
   useEffect(() => {
-    if (!instanceId) {
-      setGroups([]);
-      setGroupId('');
-      setGroupSearchFilter('');
-      return;
-    }
+    if (!config.instanceId) { setGroups([]); return; }
+    loadGroups(config.instanceId, false);
+  }, [config.instanceId]);
 
-    const loadGroups = async () => {
-      setLoading(true);
-      setError('');
-      setGroupSearchFilter('');
-      try {
-        const data = await fetchAPI(`/groups/sync/${instanceId}`);
-        // API retorna { message, groups }
-        const groupsArray = data?.groups || data || [];
-        setGroups(Array.isArray(groupsArray) ? groupsArray : []);
-      } catch (err) {
-        console.error('Erro ao carregar grupos:', err);
-        setError('Erro ao carregar grupos da instância');
-        setGroups([]);
-      } finally {
-        setLoading(false);
-      }
-    };
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
-    loadGroups();
-  }, [instanceId]);
-
-  // Enviar campanha
-  const handleDispatch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setDispatching(true);
+  const loadGroups = async (instId: string, forceSync: boolean) => {
+    setGroupsLoading(true);
+    setGroupsSyncing(forceSync);
     setError('');
-    setSuccess('');
-
     try {
-      if (!name || !message || !instanceId || !groupId) {
-        throw new Error('Preencha todos os campos obrigatórios');
+      const endpoint = forceSync ? `/groups/sync/${instId}` : `/groups?instanceId=${instId}`;
+      const data = await fetchAPI(endpoint);
+      if (data?.groups?.length > 0) {
+        setGroups(data.groups);
+        setGroupsLoading(false);
+        setGroupsSyncing(false);
+        return;
       }
-
-      // Validar grupo
-      const selectedGroup = groups.find(g => g.id === groupId);
-      if (!selectedGroup) {
-        console.error('Grupos disponíveis:', groups);
-        console.error('GroupId selecionado:', groupId);
-        throw new Error('Grupo inválido');
+      if (data?.loading || forceSync) {
+        setGroupsSyncing(true);
+        setGroups([]);
+        startGroupPolling(instId);
+      } else {
+        setGroups([]);
+        setGroupsLoading(false);
       }
-
-      // Criar campanha via nova rota /campaigns
-      const newCampaign = await fetchAPI('/campaigns', {
-        method: 'POST',
-        body: {
-          name,
-          instanceId: parseInt(instanceId, 10),
-          groupId,
-          message,
-          useAntibanVariations,
-          useAntibanDelays,
-          useCommercialHours,
-        }
-      });
-
-      // Iniciar campanha
-      await fetchAPI(`/campaigns/${newCampaign.id}/start`, {
-        method: 'POST',
-      });
-
-      setSuccess(`✅ Disparo iniciado com sucesso para ${selectedGroup.name}!`);
-
-      // Resetar formulário
-      setStep(1);
-      setName('');
-      setMessage('');
-      setInstanceId('');
-      setGroupId('');
-    } catch (err: any) {
-      setError(err.message || 'Erro ao iniciar disparo');
-    } finally {
-      setDispatching(false);
-    }
+    } catch { setError('Erro ao carregar grupos'); setGroupsLoading(false); }
   };
 
-  const selectedInstance = instances.find(i => i.id === instanceId);
-  const selectedGroup = groups.find(g => g.id === groupId);
+  const startGroupPolling = (instId: string) => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
+      try {
+        const data = await fetchAPI(`/groups?instanceId=${instId}`);
+        if (data?.groups?.length > 0) {
+          setGroups(data.groups);
+          setGroupsLoading(false);
+          setGroupsSyncing(false);
+          clearInterval(pollRef.current!);
+          pollRef.current = null;
+        }
+      } catch { /* ignora */ }
+    }, 5000);
+  };
 
-  return (
-    <div className="animate-fade-in space-y-6">
-      {/* Header */}
-      <div className="dashboard-card relative overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-r from-brand-500/0 via-brand-500/5 to-brand-500/0" />
-        <div className="relative z-10">
-          <span className="bg-brand-500/10 text-brand-500 text-[10px] font-black uppercase px-3 py-1 rounded-md mb-3 inline-block tracking-widest">
-            Disparador Elite
-          </span>
-          <h2 className="text-2xl md:text-3xl font-black text-white mb-2 uppercase tracking-tighter">
-            Disparo em Grupos
-          </h2>
-          <p className="text-slate-400 text-sm">Envie mensagens privadas para membros de grupos com proteção anti-ban integrada</p>
-        </div>
-      </div>
+  const handleXlsx = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setXlsxFileName(file.name);
+    const text = await file.text();
+    const numbers = text.split(/[\n\r,;]+/)
+      .map(l => l.replace(/\D/g, ''))
+      .filter(n => n.length >= 10 && n.length <= 15);
+    setConfig(c => ({ ...c, xlsxNumbers: [...new Set(numbers)] }));
+  };
 
-      {/* Step 1: Selecionar Instância */}
-      {step === 1 && (
-        <div className="dashboard-card-interactive">
-          <div className="flex items-center gap-4 mb-6">
-            <div className="w-10 h-10 rounded-xl bg-brand-500/10 flex items-center justify-center text-brand-500 border border-brand-500/20 font-black text-sm">1</div>
+  const updateMessage = (index: number, value: string) => {
+    const msgs = [...config.messages];
+    msgs[index] = value;
+    setConfig(c => ({ ...c, messages: msgs }));
+  };
+
+  const addVariation = () => setConfig(c => ({ ...c, messages: [...c.messages, ''] }));
+  const removeVariation = (i: number) => setConfig(c => ({ ...c, messages: c.messages.filter((_, idx) => idx !== i) }));
+
+  const getRandomMessage = () => {
+    const valid = config.messages.filter(m => m.trim());
+    return valid[Math.floor(Math.random() * valid.length)] || '';
+  };
+
+  const getRandomDelay = () =>
+    Math.floor(Math.random() * (config.delayMax - config.delayMin + 1)) + config.delayMin;
+
+  const handleStart = async () => {
+    if (!config.messages.some(m => m.trim())) return setError('Digite pelo menos uma mensagem');
+    if (!config.instanceId) return setError('Selecione uma instância');
+    setError('');
+    abortRef.current = false;
+    sentNumbersRef.current = new Set();
+
+    setCampaign({ status: 'loading_participants', total: 0, sent: 0, failed: 0, skipped: 0, current: '', startedAt: Date.now(), estimatedEnd: null, numbers: [], currentIndex: 0 });
+
+    let numbers: string[] = [];
+    let adminNumbers: Set<string> = new Set();
+
+    if (config.sourceType === 'group') {
+      if (!config.groupId) { setError('Selecione um grupo'); setCampaign(null); return; }
+      try {
+        const data = await fetchAPI(`/groups/participants/${config.instanceId}/${encodeURIComponent(config.groupId)}`);
+        numbers = data?.participants || [];
+        if (config.excludeAdmins && data?.admins) {
+          adminNumbers = new Set(data.admins);
+        }
+        if (numbers.length === 0) { setError('Nenhum participante encontrado'); setCampaign(null); return; }
+      } catch (err: any) {
+        setError(`Erro ao buscar participantes: ${err.message}`);
+        setCampaign(null);
+        return;
+      }
+    } else {
+      numbers = config.xlsxNumbers;
+      if (numbers.length === 0) { setError('Carregue um arquivo com números'); setCampaign(null); return; }
+    }
+
+    // Exclui admins
+    if (config.excludeAdmins && adminNumbers.size > 0) {
+      numbers = numbers.filter(n => !adminNumbers.has(n));
+    }
+
+    // Randomiza ordem
+    if (config.randomizeOrder) {
+      numbers = [...numbers].sort(() => Math.random() - 0.5);
+    }
+
+    setCampaign(c => ({ ...c!, status: 'running', total: numbers.length, numbers, startedAt: Date.now() }));
+
+    let sent = 0, failed = 0, skipped = 0;
+
+    for (let i = 0; i < numbers.length; i++) {
+      if (abortRef.current) break;
+
+      const number = numbers[i];
+
+      // Pula já enviados
+      if (config.skipAlreadySent && sentNumbersRef.current.has(number)) {
+        skipped++;
+        setCampaign(c => c ? { ...c, skipped, currentIndex: i + 1 } : null);
+        continue;
+      }
+
+      // Aguarda se pausado
+      while (true) {
+        const current = await new Promise<CampaignMetrics | null>(r => setTimeout(() => r(null), 100));
+        // verifica se está pausado via ref
+        if (!abortRef.current) break;
+        if (abortRef.current) break;
+        break;
+      }
+
+      if (abortRef.current) break;
+
+      setCampaign(c => c ? { ...c, current: number, currentIndex: i + 1 } : null);
+
+      const msg = getRandomMessage();
+      if (!msg) { skipped++; continue; }
+
+      try {
+        await fetchAPI('/disparador/send-single', {
+          method: 'POST',
+          body: { instanceId: config.instanceId, number, message: msg }
+        });
+        sent++;
+        sentNumbersRef.current.add(number);
+      } catch {
+        failed++;
+      }
+
+      // Calcula ETA
+      const elapsed = Date.now() - (Date.now() - ((i + 1) * getRandomDelay()));
+      const avgDelay = (config.delayMin + config.delayMax) / 2;
+      const remaining = (numbers.length - i - 1) * avgDelay;
+      const estimatedEnd = Date.now() + remaining;
+
+      setCampaign(c => c ? { ...c, sent, failed, skipped, estimatedEnd } : null);
+
+      // Delay randomico
+      const delay = getRandomDelay();
+      await new Promise(r => setTimeout(r, delay));
+    }
+
+    setCampaign(c => c ? { ...c, status: abortRef.current ? 'cancelled' : 'done', current: '', estimatedEnd: null } : null);
+  };
+
+  const handlePause = () => { abortRef.current = true; setCampaign(c => c ? { ...c, status: 'cancelled' } : null); };
+
+  const handleReset = () => { setCampaign(null); abortRef.current = false; };
+
+  const filteredGroups = groups.filter(g => g.name.toLowerCase().includes(groupSearch.toLowerCase()));
+  const selectedGroup = groups.find(g => g.id === config.groupId);
+  const isCampaignActive = campaign && (campaign.status === 'running' || campaign.status === 'loading_participants');
+  const pct = campaign && campaign.total > 0 ? Math.round(((campaign.sent + campaign.failed + campaign.skipped) / campaign.total) * 100) : 0;
+
+  const formatTime = (ms: number) => {
+    const s = Math.floor(ms / 1000);
+    const m = Math.floor(s / 60);
+    const h = Math.floor(m / 60);
+    if (h > 0) return `${h}h ${m % 60}m`;
+    if (m > 0) return `${m}m ${s % 60}s`;
+    return `${s}s`;
+  };
+
+  const elapsed = campaign?.startedAt ? Date.now() - campaign.startedAt : 0;
+  const eta = campaign?.estimatedEnd ? campaign.estimatedEnd - Date.now() : null;
+
+  // ─── TELA DE CAMPANHA ATIVA ───────────────────────────────────
+  if (campaign && campaign.status !== 'idle') {
+    return (
+      <div className="space-y-4 animate-fade-in">
+        {/* Status Header */}
+        <div className="dashboard-card">
+          <div className="flex items-center justify-between mb-4">
             <div>
-              <h3 className="text-lg font-black text-white uppercase">Selecionar WhatsApp</h3>
-              <p className="text-sm text-slate-500">Escolha a instância que será usada para o disparo</p>
+              <h2 className="text-xl font-black text-white uppercase tracking-tight">
+                {campaign.status === 'loading_participants' ? '⏳ Carregando...' :
+                 campaign.status === 'running' ? '🚀 Disparo em Andamento' :
+                 campaign.status === 'done' ? '✅ Disparo Concluído' :
+                 '🛑 Disparo Cancelado'}
+              </h2>
+              <p className="text-slate-500 text-sm mt-1">
+                {campaign.status === 'running' ? `Enviando para ${campaign.current || '...'}` :
+                 campaign.status === 'done' ? 'Todos os contatos foram processados' :
+                 campaign.status === 'cancelled' ? 'O disparo foi interrompido manualmente' : ''}
+              </p>
             </div>
+            {(campaign.status === 'done' || campaign.status === 'cancelled') && (
+              <button onClick={handleReset} className="px-4 py-2 border border-white/10 text-slate-400 font-black text-xs uppercase rounded-xl hover:border-white/20 hover:text-white transition-all">
+                Novo Disparo
+              </button>
+            )}
           </div>
 
-          {error && <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 mb-4 text-red-400 text-sm flex items-center gap-2">
-            <AlertCircle size={16} /> {error}
-          </div>}
+          {/* Barra de progresso */}
+          <div className="space-y-2">
+            <div className="flex justify-between text-xs text-slate-400">
+              <span>{pct}% concluído</span>
+              <span>{campaign.sent + campaign.failed + campaign.skipped}/{campaign.total}</span>
+            </div>
+            <div className="w-full bg-slate-800 rounded-full h-3 overflow-hidden">
+              <div
+                className={`h-3 rounded-full transition-all duration-500 ${campaign.status === 'done' ? 'bg-emerald-500' : campaign.status === 'cancelled' ? 'bg-red-500' : 'bg-brand-500'}`}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+          </div>
+        </div>
 
-          <div className="space-y-4">
-            {instances.length === 0 ? (
-              <div className="bg-slate-900/50 border border-white/5 rounded-xl p-8 text-center">
-                <AlertCircle size={32} className="text-slate-500 mx-auto mb-3" />
-                <p className="text-slate-400 text-sm">Nenhuma instância conectada</p>
-                <p className="text-slate-600 text-xs mt-2">Conecte um WhatsApp primeiro</p>
+        {/* Métricas */}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="dashboard-card text-center">
+            <div className="text-3xl font-black text-emerald-400">{campaign.sent}</div>
+            <div className="text-xs font-black text-slate-500 uppercase mt-1">Enviados</div>
+          </div>
+          <div className="dashboard-card text-center">
+            <div className="text-3xl font-black text-red-400">{campaign.failed}</div>
+            <div className="text-xs font-black text-slate-500 uppercase mt-1">Falhas</div>
+          </div>
+          <div className="dashboard-card text-center">
+            <div className="text-3xl font-black text-slate-400">{campaign.skipped}</div>
+            <div className="text-xs font-black text-slate-500 uppercase mt-1">Pulados</div>
+          </div>
+          <div className="dashboard-card text-center">
+            <div className="text-3xl font-black text-brand-400">{campaign.total - campaign.sent - campaign.failed - campaign.skipped}</div>
+            <div className="text-xs font-black text-slate-500 uppercase mt-1">Restantes</div>
+          </div>
+        </div>
+
+        {/* Tempo */}
+        <div className="dashboard-card grid grid-cols-2 gap-4">
+          <div className="flex items-center gap-3">
+            <Clock size={18} className="text-slate-500" />
+            <div>
+              <div className="text-xs text-slate-500 uppercase font-black">Tempo decorrido</div>
+              <div className="text-white font-black">{formatTime(elapsed)}</div>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <TrendingUp size={18} className="text-slate-500" />
+            <div>
+              <div className="text-xs text-slate-500 uppercase font-black">Tempo restante</div>
+              <div className="text-white font-black">{eta && eta > 0 ? formatTime(eta) : campaign.status === 'done' ? '—' : 'Calculando...'}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Taxa de sucesso */}
+        {campaign.total > 0 && (campaign.sent + campaign.failed) > 0 && (
+          <div className="dashboard-card">
+            <div className="flex justify-between items-center mb-2">
+              <span className="text-xs font-black text-slate-400 uppercase">Taxa de Sucesso</span>
+              <span className="text-emerald-400 font-black text-sm">
+                {Math.round((campaign.sent / (campaign.sent + campaign.failed)) * 100)}%
+              </span>
+            </div>
+            <div className="w-full bg-slate-800 rounded-full h-2">
+              <div
+                className="bg-emerald-500 h-2 rounded-full transition-all"
+                style={{ width: `${Math.round((campaign.sent / (campaign.sent + campaign.failed)) * 100)}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Botão cancelar */}
+        {isCampaignActive && (
+          <button
+            onClick={handlePause}
+            className="w-full py-4 bg-red-500/20 border border-red-500/40 text-red-400 font-black text-sm uppercase rounded-xl hover:bg-red-500/30 transition-all flex items-center justify-center gap-2"
+          >
+            <StopCircle size={18} /> Parar Disparo
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  // ─── TELA DE CONFIGURAÇÃO ─────────────────────────────────────
+  return (
+    <div className="space-y-5 animate-fade-in">
+      <div className="dashboard-card">
+        <h2 className="text-xl font-black text-white uppercase tracking-tight">Elite Disparador</h2>
+        <p className="text-slate-500 text-sm mt-1">Configure e dispare mensagens em massa</p>
+      </div>
+
+      {/* Instância */}
+      <div className="dashboard-card space-y-3">
+        <label className="text-xs font-black text-slate-400 uppercase tracking-widest">Instância WhatsApp</label>
+        <select
+          value={config.instanceId}
+          onChange={e => setConfig(c => ({ ...c, instanceId: e.target.value, groupId: '' }))}
+          className="w-full px-4 py-3 bg-slate-900/50 border border-white/10 rounded-xl text-white text-sm focus:border-brand-500/50 focus:outline-none"
+        >
+          <option value="">Selecione...</option>
+          {instances.map(i => (
+            <option key={i.id} value={String(i.id)}>
+              {i.name} {i.phoneNumber ? `(${i.phoneNumber})` : ''}
+            </option>
+          ))}
+        </select>
+        {instances.length === 0 && <p className="text-xs text-yellow-500">Nenhuma instância conectada</p>}
+      </div>
+
+      {/* Fonte */}
+      <div className="dashboard-card space-y-4">
+        <label className="text-xs font-black text-slate-400 uppercase tracking-widest">Fonte dos Contatos</label>
+        <div className="flex gap-3">
+          {(['group', 'xlsx'] as const).map(type => (
+            <button key={type} onClick={() => setConfig(c => ({ ...c, sourceType: type }))}
+              className={`flex-1 py-3 rounded-xl font-black text-sm uppercase transition-all flex items-center justify-center gap-2 ${config.sourceType === type ? 'bg-brand-500 text-white' : 'border border-white/10 text-slate-400 hover:border-white/20'}`}>
+              {type === 'group' ? <><Users size={15} /> Grupos</> : <><Upload size={15} /> Arquivo</>}
+            </button>
+          ))}
+        </div>
+
+        {/* Grupos */}
+        {config.sourceType === 'group' && (
+          <div className="space-y-3">
+            <div className="flex gap-2">
+              <input type="text" placeholder="Buscar grupo..." value={groupSearch}
+                onChange={e => setGroupSearch(e.target.value)}
+                className="flex-1 px-4 py-2 bg-slate-900/50 border border-white/10 rounded-xl text-white text-sm placeholder-slate-500 focus:outline-none focus:border-brand-500/50" />
+              <button onClick={() => config.instanceId && loadGroups(config.instanceId, true)}
+                disabled={!config.instanceId || groupsSyncing}
+                className="px-3 py-2 border border-white/10 rounded-xl text-slate-400 hover:text-white transition-all disabled:opacity-40" title="Sincronizar">
+                <RefreshCw size={16} className={groupsSyncing ? 'animate-spin' : ''} />
+              </button>
+            </div>
+
+            {groupsSyncing && (
+              <div className="flex items-center gap-2 text-slate-400 text-xs p-3 bg-slate-900/30 rounded-xl border border-white/5">
+                <Loader2 size={14} className="animate-spin text-brand-500" />
+                <span>Sincronizando grupos... pode demorar alguns minutos.</span>
               </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {instances.map((instance) => (
-                  <div
-                    key={instance.id}
-                    onClick={() => {
-                      setInstanceId(instance.id);
-                      setStep(2);
-                    }}
-                    className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                      instanceId === instance.id
-                        ? 'bg-brand-500/10 border-brand-500/50'
-                        : 'bg-slate-900/30 border-white/10 hover:border-brand-500/30'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between mb-2">
-                      <h4 className="font-black text-white text-sm uppercase">{instance.name}</h4>
-                      <span className={`text-[10px] font-black px-2 py-1 rounded-md uppercase ${
-                        instance.status === 'connected' 
-                          ? 'bg-emerald-500/10 text-emerald-500'
-                          : 'bg-slate-500/10 text-slate-500'
-                      }`}>
-                        {instance.status === 'connected' ? '✓ Conectado' : 'Desconectado'}
-                      </span>
-                    </div>
-                    {instance.phoneNumber && (
-                      <p className="text-xs text-slate-400">{instance.phoneNumber}</p>
-                    )}
-                  </div>
+            )}
+
+            {!groupsSyncing && filteredGroups.length > 0 && (
+              <div className="max-h-52 overflow-y-auto space-y-1">
+                {filteredGroups.map(g => (
+                  <button key={g.id} onClick={() => setConfig(c => ({ ...c, groupId: g.id }))}
+                    className={`w-full text-left px-4 py-2.5 rounded-xl text-sm transition-all flex items-center justify-between ${config.groupId === g.id ? 'bg-brand-500/20 border border-brand-500/40 text-brand-300' : 'hover:bg-white/5 text-slate-300 border border-transparent'}`}>
+                    <span className="truncate font-medium">{g.name}</span>
+                    {g.participantsCount ? <span className="text-xs text-slate-500 ml-2 shrink-0">{g.participantsCount}</span> : null}
+                  </button>
                 ))}
               </div>
             )}
-          </div>
-        </div>
-      )}
 
-      {/* Step 2: Selecionar Grupo */}
-      {step === 2 && (
-        <div className="dashboard-card-interactive">
-          <div className="flex items-center gap-4 mb-6">
-            <div className="w-10 h-10 rounded-xl bg-brand-500/10 flex items-center justify-center text-brand-500 border border-brand-500/20 font-black text-sm">2</div>
-            <div>
-              <h3 className="text-lg font-black text-white uppercase">Selecionar Grupo</h3>
-              <p className="text-sm text-slate-500">Escolha o grupo para extrair os membros</p>
-            </div>
-          </div>
-
-          {selectedInstance && (
-            <div className="bg-slate-900/30 border border-brand-500/20 rounded-xl p-4 mb-6">
-              <p className="text-xs text-slate-500 uppercase tracking-widest font-black">WhatsApp Selecionado</p>
-              <p className="text-white font-black">{selectedInstance.name}</p>
-            </div>
-          )}
-
-          {loading ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 size={20} className="animate-spin text-brand-500 mr-2" />
-              <span className="text-slate-400">Carregando grupos...</span>
-            </div>
-          ) : groups.length === 0 ? (
-            <div className="bg-slate-900/50 border border-white/5 rounded-xl p-8 text-center">
-              <AlertCircle size={32} className="text-slate-500 mx-auto mb-3" />
-              <p className="text-slate-400 text-sm">Nenhum grupo encontrado</p>
-              <p className="text-slate-600 text-xs mt-2">Crie um grupo e adicione membros</p>
-            </div>
-          ) : (
-            <>
-              {/* Campo de Busca */}
-              <div className="mb-4">
-                <input
-                  type="text"
-                  placeholder="🔍 Buscar grupos por nome..."
-                  value={groupSearchFilter}
-                  onChange={(e) => setGroupSearchFilter(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-slate-900/50 border border-white/10 rounded-xl text-white placeholder-slate-500 focus:border-brand-500/50 focus:outline-none transition-all text-sm"
-                />
+            {!groupsSyncing && groups.length === 0 && config.instanceId && (
+              <div className="text-center py-6">
+                <p className="text-slate-500 text-sm mb-3">Nenhum grupo carregado</p>
+                <button onClick={() => loadGroups(config.instanceId, true)}
+                  className="px-4 py-2 bg-brand-500 hover:bg-brand-600 text-white font-black text-xs uppercase rounded-xl transition-all">
+                  Sincronizar Grupos
+                </button>
               </div>
+            )}
 
-              {/* Lista de Grupos Filtrada */}
-              <div className="space-y-3 max-h-96 overflow-y-auto">
-                {groups
-                  .filter((group) => group.name.toLowerCase().includes(groupSearchFilter.toLowerCase()))
-                  .map((group) => (
-                    <div
-                      key={group.id}
-                      onClick={() => {
-                        setGroupId(group.id);
-                        setStep(3);
-                      }}
-                      className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                        groupId === group.id
-                          ? 'bg-brand-500/10 border-brand-500/50'
-                          : 'bg-slate-900/30 border-white/10 hover:border-brand-500/30'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1">
-                          <h4 className="font-black text-white text-sm uppercase">{group.name}</h4>
-                          <div className="flex items-center gap-2 mt-2">
-                            <Users size={12} className="text-slate-500" />
-                            <span className="text-xs text-slate-400">{group.participantsCount} membros</span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-
-                {groups.filter((group) => group.name.toLowerCase().includes(groupSearchFilter.toLowerCase())).length === 0 && (
-                  <div className="text-center py-8">
-                    <AlertCircle size={24} className="text-slate-500 mx-auto mb-2" />
-                    <p className="text-slate-400 text-sm">Nenhum grupo encontrado com esse nome</p>
-                  </div>
-                )}
+            {selectedGroup && (
+              <div className="flex items-center gap-2 p-3 bg-brand-500/10 border border-brand-500/20 rounded-xl">
+                <CheckCircle2 size={16} className="text-brand-400" />
+                <span className="text-brand-300 text-sm font-semibold truncate">{selectedGroup.name}</span>
+                {selectedGroup.participantsCount && <span className="text-slate-500 text-xs ml-auto">{selectedGroup.participantsCount} membros</span>}
               </div>
-            </>
-          )}
+            )}
+          </div>
+        )}
 
-          <button
-            onClick={() => setStep(1)}
-            className="mt-6 text-slate-400 hover:text-slate-300 text-sm font-black uppercase transition-all"
-          >
-            ← Voltar
+        {/* Arquivo */}
+        {config.sourceType === 'xlsx' && (
+          <div className="space-y-3">
+            <label className="flex flex-col items-center justify-center w-full h-24 border-2 border-dashed border-white/10 rounded-xl cursor-pointer hover:border-brand-500/40 transition-all">
+              <Upload size={20} className="text-slate-500 mb-1" />
+              <span className="text-slate-500 text-sm">{xlsxFileName || 'CSV ou TXT com números (um por linha)'}</span>
+              <input type="file" accept=".csv,.txt" onChange={handleXlsx} className="hidden" />
+            </label>
+            {config.xlsxNumbers.length > 0 && (
+              <div className="flex items-center gap-2 p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
+                <CheckCircle2 size={16} className="text-emerald-400" />
+                <span className="text-emerald-300 text-sm">{config.xlsxNumbers.length} números carregados</span>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Mensagens / Variações */}
+      <div className="dashboard-card space-y-3">
+        <div className="flex items-center justify-between">
+          <label className="text-xs font-black text-slate-400 uppercase tracking-widest">
+            Mensagens {config.messages.length > 1 && <span className="text-brand-400">({config.messages.length} variações)</span>}
+          </label>
+          <button onClick={addVariation}
+            className="text-xs text-brand-400 hover:text-brand-300 font-black uppercase transition-colors">
+            + Variação
           </button>
         </div>
-      )}
 
-      {/* Step 3: Compor Mensagem */}
-      {step === 3 && (
-        <div className="space-y-6">
-          <div className="dashboard-card-interactive">
-            <div className="flex items-center gap-4 mb-6">
-              <div className="w-10 h-10 rounded-xl bg-brand-500/10 flex items-center justify-center text-brand-500 border border-brand-500/20 font-black text-sm">3</div>
-              <div>
-                <h3 className="text-lg font-black text-white uppercase">Compor Mensagem</h3>
-                <p className="text-sm text-slate-500">Digite a mensagem personalizada</p>
-              </div>
+        {config.messages.map((msg, i) => (
+          <div key={i} className="relative">
+            <textarea value={msg} onChange={e => updateMessage(i, e.target.value)}
+              placeholder={`Mensagem ${i + 1}${i === 0 ? ' (principal)' : ` (variação ${i})`}...`}
+              rows={4}
+              className="w-full px-4 py-3 bg-slate-900/50 border border-white/10 rounded-xl text-white placeholder-slate-500 focus:border-brand-500/50 focus:outline-none text-sm resize-none pr-10" />
+            {i > 0 && (
+              <button onClick={() => removeVariation(i)}
+                className="absolute top-3 right-3 text-slate-600 hover:text-red-400 transition-colors">
+                <X size={14} />
+              </button>
+            )}
+          </div>
+        ))}
+
+        {config.messages.length > 1 && (
+          <p className="text-xs text-slate-600 flex items-center gap-1">
+            <Zap size={12} className="text-brand-500" />
+            Uma variação aleatória será enviada para cada contato
+          </p>
+        )}
+      </div>
+
+      {/* Velocidade */}
+      <div className="dashboard-card space-y-4">
+        <label className="text-xs font-black text-slate-400 uppercase tracking-widest">Velocidade de Envio</label>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="text-xs text-slate-500 mb-1 block">Delay mínimo</label>
+            <div className="flex items-center gap-2">
+              <input type="range" min={500} max={30000} step={500} value={config.delayMin}
+                onChange={e => setConfig(c => ({ ...c, delayMin: Math.min(Number(e.target.value), c.delayMax - 500) }))}
+                className="flex-1" />
+              <span className="text-white text-sm w-14 text-right">{(config.delayMin / 1000).toFixed(1)}s</span>
             </div>
-
-            <form onSubmit={handleDispatch} className="space-y-6">
-              {/* Informações Selecionadas */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="bg-slate-900/30 border border-white/5 rounded-xl p-4">
-                  <p className="text-xs text-slate-500 uppercase tracking-widest font-black mb-1">WhatsApp</p>
-                  <p className="text-white font-black">{selectedInstance?.name || '--'}</p>
-                </div>
-                <div className="bg-slate-900/30 border border-white/5 rounded-xl p-4">
-                  <p className="text-xs text-slate-500 uppercase tracking-widest font-black mb-1">Grupo Selecionado</p>
-                  <p className="text-white font-black">{selectedGroup?.name || '--'}</p>
-                  <p className="text-xs text-slate-400 mt-1">{selectedGroup?.participantsCount || 0} membros</p>
-                </div>
-              </div>
-
-              {/* Nome da Campanha */}
-              <div>
-                <label className="text-xs font-black text-slate-500 uppercase tracking-widest mb-2 block">
-                  Nome da Campanha
-                </label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Ex: Promoção Blackfriday"
-                  className="w-full bg-[#060b16] border border-white/5 rounded-xl px-4 py-3 text-white text-sm font-medium focus:outline-none focus:border-brand-500 transition-all"
-                  required
-                />
-              </div>
-
-              {/* Mensagem */}
-              <div>
-                <label className="text-xs font-black text-slate-500 uppercase tracking-widest mb-2 block">
-                  Mensagem a Enviar
-                </label>
-                <textarea
-                  value={message}
-                  onChange={(e) => setMessage(e.target.value)}
-                  placeholder="Olá {{nome}}! Temos uma oferta especial para você..."
-                  rows={5}
-                  className="w-full bg-[#060b16] border border-white/5 rounded-xl px-4 py-3 text-white text-sm font-medium focus:outline-none focus:border-brand-500 transition-all resize-none"
-                  required
-                />
-                <p className="text-xs text-slate-500 mt-2">
-                  💡 Use: <code className="bg-white/5 px-2 py-1 rounded">{'{{nome}}'}</code> <code className="bg-white/5 px-2 py-1 rounded">{'{{telefone}}'}</code> <code className="bg-white/5 px-2 py-1 rounded">{'{{data}}'}</code> <code className="bg-white/5 px-2 py-1 rounded">{'{{dia_semana}}'}</code>
-                </p>
-              </div>
-
-              {/* Velocidade do Motor */}
-              <div>
-                <DelayUI 
-                  selectedDelay={selectedDelay}
-                  onSelectDelay={setSelectedDelay}
-                  showDescription={true}
-                />
-              </div>
-
-              {/* Opções Anti-Ban */}
-              <div className="bg-[#060b16] border border-white/5 rounded-xl p-6 space-y-4">
-                <h4 className="text-sm font-black text-white uppercase flex items-center gap-2">
-                  <Shield size={16} className="text-brand-500" />
-                  Sistema Anti-Ban
-                </h4>
-
-                <label className="flex items-start gap-3 cursor-pointer hover:bg-white/3 p-3 rounded-lg transition-all">
-                  <input
-                    type="checkbox"
-                    checked={useAntibanVariations}
-                    onChange={(e) => setUseAntibanVariations(e.target.checked)}
-                    className="w-4 h-4 mt-1 rounded border-white/10 bg-[#1c2433]"
-                  />
-                  <div className="flex-1">
-                    <p className="text-sm font-bold text-white">4 Variações de Mensagem</p>
-                    <p className="text-xs text-slate-600">Cada contato recebe uma versão diferente</p>
-                  </div>
-                </label>
-
-                <label className="flex items-start gap-3 cursor-pointer hover:bg-white/3 p-3 rounded-lg transition-all">
-                  <input
-                    type="checkbox"
-                    checked={useAntibanDelays}
-                    onChange={(e) => setUseAntibanDelays(e.target.checked)}
-                    className="w-4 h-4 mt-1 rounded border-white/10 bg-[#1c2433]"
-                  />
-                  <div className="flex-1">
-                    <p className="text-sm font-bold text-white">Delays Randômicos</p>
-                    <p className="text-xs text-slate-600">3-45 segundos entre mensagens</p>
-                  </div>
-                </label>
-
-                <label className="flex items-start gap-3 cursor-pointer hover:bg-white/3 p-3 rounded-lg transition-all">
-                  <input
-                    type="checkbox"
-                    checked={useCommercialHours}
-                    onChange={(e) => setUseCommercialHours(e.target.checked)}
-                    className="w-4 h-4 mt-1 rounded border-white/10 bg-[#1c2433]"
-                  />
-                  <div className="flex-1">
-                    <p className="text-sm font-bold text-white">Horário Comercial</p>
-                    <p className="text-xs text-slate-600">Apenas entre 9h-21h (pausa à noite)</p>
-                  </div>
-                </label>
-
-                <label className="flex items-start gap-3 cursor-pointer hover:bg-white/3 p-3 rounded-lg transition-all border-t border-white/5 pt-4">
-                  <input
-                    type="checkbox"
-                    checked={excludeAdmins}
-                    onChange={(e) => setExcludeAdmins(e.target.checked)}
-                    className="w-4 h-4 mt-1 rounded border-white/10 bg-[#1c2433]"
-                  />
-                  <div className="flex-1">
-                    <p className="text-sm font-bold text-white">Excluir Administradores</p>
-                    <p className="text-xs text-slate-600">Não enviar para admins do grupo</p>
-                  </div>
-                </label>
-
-                <label className="flex items-start gap-3 cursor-pointer hover:bg-white/3 p-3 rounded-lg transition-all">
-                  <input
-                    type="checkbox"
-                    checked={excludeAlreadySent}
-                    onChange={(e) => setExcludeAlreadySent(e.target.checked)}
-                    className="w-4 h-4 mt-1 rounded border-white/10 bg-[#1c2433]"
-                  />
-                  <div className="flex-1">
-                    <p className="text-sm font-bold text-white">Não Reenviar</p>
-                    <p className="text-xs text-slate-600">Excluir quem já recebeu (evitar duplicatas)</p>
-                  </div>
-                </label>
-              </div>
-
-              {/* Erros */}
-              {error && (
-                <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 text-red-400 text-sm flex items-start gap-2">
-                  <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
-                  <span>{error}</span>
-                </div>
-              )}
-
-              {/* Sucesso */}
-              {success && (
-                <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4 text-emerald-400 text-sm flex items-start gap-2">
-                  <CheckCircle2 size={16} className="mt-0.5 flex-shrink-0" />
-                  <span>{success}</span>
-                </div>
-              )}
-
-              {/* Botões */}
-              <div className="flex gap-4 pt-4 border-t border-white/5">
-                <button
-                  type="button"
-                  onClick={() => setStep(2)}
-                  className="px-6 py-3 rounded-xl border border-white/10 text-white font-black text-sm uppercase hover:bg-white/5 transition-all"
-                >
-                  ← Voltar
-                </button>
-                <button
-                  type="submit"
-                  disabled={dispatching || !name || !message}
-                  className="flex-1 bg-brand-500 hover:bg-brand-400 disabled:opacity-50 disabled:cursor-not-allowed text-white px-6 py-3 rounded-xl font-black text-sm uppercase transition-all flex items-center justify-center gap-2 shadow-lg shadow-brand-500/30"
-                >
-                  {dispatching ? (
-                    <>
-                      <Loader2 size={16} className="animate-spin" />
-                      Iniciando Disparo...
-                    </>
-                  ) : (
-                    <>
-                      <Send size={16} />
-                      Iniciar Disparo
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
+          </div>
+          <div>
+            <label className="text-xs text-slate-500 mb-1 block">Delay máximo</label>
+            <div className="flex items-center gap-2">
+              <input type="range" min={1000} max={60000} step={500} value={config.delayMax}
+                onChange={e => setConfig(c => ({ ...c, delayMax: Math.max(Number(e.target.value), c.delayMin + 500) }))}
+                className="flex-1" />
+              <span className="text-white text-sm w-14 text-right">{(config.delayMax / 1000).toFixed(1)}s</span>
+            </div>
           </div>
         </div>
+        <div className="flex items-center justify-between p-3 bg-slate-900/30 rounded-xl border border-white/5">
+          <span className="text-xs text-slate-400">Intervalo randomico entre {(config.delayMin / 1000).toFixed(1)}s e {(config.delayMax / 1000).toFixed(1)}s</span>
+          <span className="text-xs text-brand-400 font-black">Anti-ban ativo</span>
+        </div>
+      </div>
+
+      {/* Opções avançadas */}
+      <div className="dashboard-card">
+        <button onClick={() => setShowAdvanced(!showAdvanced)}
+          className="w-full flex items-center justify-between text-xs font-black text-slate-400 uppercase tracking-widest">
+          <span className="flex items-center gap-2"><Shield size={14} /> Opções Avançadas</span>
+          {showAdvanced ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </button>
+
+        {showAdvanced && (
+          <div className="mt-4 space-y-3">
+            {[
+              { key: 'excludeAdmins', label: 'Excluir administradores do grupo', icon: Shield },
+              { key: 'skipAlreadySent', label: 'Não reenviar para contatos já enviados', icon: CheckCircle2 },
+              { key: 'randomizeOrder', label: 'Randomizar ordem de envio', icon: Zap },
+            ].map(({ key, label, icon: Icon }) => (
+              <label key={key} className="flex items-center gap-3 cursor-pointer group">
+                <div onClick={() => setConfig(c => ({ ...c, [key]: !(c as any)[key] }))}
+                  className={`w-10 h-6 rounded-full transition-all relative ${(config as any)[key] ? 'bg-brand-500' : 'bg-slate-700'}`}>
+                  <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${(config as any)[key] ? 'left-5' : 'left-1'}`} />
+                </div>
+                <span className="text-sm text-slate-400 group-hover:text-white transition-colors flex items-center gap-2">
+                  <Icon size={14} className="text-slate-500" /> {label}
+                </span>
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Erro */}
+      {error && (
+        <div className="flex items-center gap-3 p-4 bg-red-500/10 border border-red-500/30 rounded-xl">
+          <AlertCircle size={18} className="text-red-400 shrink-0" />
+          <p className="text-red-400 text-sm flex-1">{error}</p>
+          <button onClick={() => setError('')}><X size={16} className="text-slate-500 hover:text-white" /></button>
+        </div>
       )}
+
+      {/* Resumo e botão */}
+      <div className="dashboard-card space-y-4">
+        <div className="grid grid-cols-3 gap-3 text-center">
+          <div>
+            <div className="text-lg font-black text-white">
+              {config.sourceType === 'group' ? (selectedGroup?.participantsCount || '?') : config.xlsxNumbers.length}
+            </div>
+            <div className="text-xs text-slate-500 uppercase">Contatos</div>
+          </div>
+          <div>
+            <div className="text-lg font-black text-white">{config.messages.filter(m => m.trim()).length}</div>
+            <div className="text-xs text-slate-500 uppercase">Variações</div>
+          </div>
+          <div>
+            <div className="text-lg font-black text-white">{((config.delayMin + config.delayMax) / 2000).toFixed(1)}s</div>
+            <div className="text-xs text-slate-500 uppercase">Delay Médio</div>
+          </div>
+        </div>
+
+        <button
+          onClick={handleStart}
+          disabled={
+            !config.messages.some(m => m.trim()) || !config.instanceId ||
+            (config.sourceType === 'group' && !config.groupId) ||
+            (config.sourceType === 'xlsx' && config.xlsxNumbers.length === 0)
+          }
+          className="w-full py-4 bg-brand-500 hover:bg-brand-600 text-white font-black text-sm uppercase rounded-xl transition-all disabled:opacity-40 flex items-center justify-center gap-2"
+        >
+          <Send size={18} /> Iniciar Disparo
+        </button>
+      </div>
     </div>
   );
 };
