@@ -233,6 +233,12 @@ const Auth: React.FC = () => {
             >
               {loading ? 'Autenticando...' : 'Entrar'}
             </button>
+
+            <p className="text-center text-slate-600 text-xs mt-4">
+              <a href="/forgot-password" className="text-slate-500 hover:text-brand-400 font-bold transition-colors">
+                Esqueci minha senha
+              </a>
+            </p>
           </form>
         </div>
       </div>

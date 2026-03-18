@@ -1,0 +1,219 @@
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  user
+  admin
+}
+
+enum UserPlan {
+  basic
+  pro
+  enterprise
+}
+
+enum InstanceStatus {
+  disconnected
+  connecting
+  connected
+  banned
+}
+
+enum CampaignStatus {
+  pending
+  running
+  paused
+  completed
+  cancelled
+}
+
+enum MessageStatus {
+  pending
+  sending
+  sent
+  delivered
+  read
+  failed
+}
+
+model User {
+  id               Int       @id @default(autoincrement())
+  email            String    @unique
+  password         String
+  fullName         String    @map("full_name")
+  role             UserRole  @default(user)
+  plan             UserPlan  @default(basic)
+  planExpiresAt    DateTime? @map("plan_expires_at")
+  isActive         Boolean   @default(true) @map("is_active")
+  lastLoginAt      DateTime? @map("last_login_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  instances    WhatsAppInstance[]
+  campaigns    Campaign[]
+  contactLists ContactList[]
+  payments     Payment[]
+
+  @@map("users")
+}
+
+model WhatsAppInstance {
+  id                 Int            @id @default(autoincrement())
+  userId             Int            @map("user_id")
+  name               String
+  phoneNumber        String?        @map("phone_number")
+  status             InstanceStatus @default(disconnected)
+  qrCode             String?        @map("qr_code") @db.Text
+  connectedAt        DateTime?      @map("connected_at")
+  accountAge         Int            @default(0) @map("account_age")
+  dailyMessagesSent  Int            @default(0) @map("daily_messages_sent")
+  totalMessagesSent  Int            @default(0) @map("total_messages_sent")
+  totalMessagesFailed Int           @default(0) @map("total_messages_failed")
+  lastMessageAt      DateTime?      @map("last_message_at")
+  isActive           Boolean        @default(true) @map("is_active")
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  campaigns Campaign[]
+  groups    WhatsAppGroup[]
+
+  @@map("whatsapp_instances")
+}
+
+model WhatsAppGroup {
+  id                Int      @id @default(autoincrement())
+  instanceId        Int      @map("instance_id")
+  groupId           String   @map("group_id")
+  name              String
+  participantsCount Int      @default(0) @map("participants_count")
+  participantsList  Json?    @map("participants_list")
+  participantsSyncedAt DateTime? @map("participants_synced_at")
+  extractedAt       DateTime? @map("extracted_at")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  instance WhatsAppInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  @@unique([instanceId, groupId])
+  @@map("whatsapp_groups")
+}
+
+model Campaign {
+  id               Int            @id @default(autoincrement())
+  userId           Int            @map("user_id")
+  instanceId       Int            @map("instance_id")
+  contactListId    Int?           @map("contact_list_id")
+  name             String
+  message          String         @db.Text
+  status           CampaignStatus @default(pending)
+  totalContacts    Int            @default(0) @map("total_contacts")
+  messagesSent     Int            @default(0) @map("messages_sent")
+  messagesFailed   Int            @default(0) @map("messages_failed")
+  messagesScheduled Int           @default(0) @map("messages_scheduled")
+  intervalMs       Int            @default(3000) @map("interval_ms")
+  startedAt        DateTime?      @map("started_at")
+  completedAt      DateTime?      @map("completed_at")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
+
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  instance    WhatsAppInstance @relation(fields: [instanceId], references: [id])
+  contactList ContactList?     @relation(fields: [contactListId], references: [id])
+  messages    Message[]
+
+  @@map("campaigns")
+}
+
+model Message {
+  id          Int           @id @default(autoincrement())
+  campaignId  Int           @map("campaign_id")
+  contactId   Int?          @map("contact_id")
+  phoneNumber String        @map("phone_number")
+  content     String        @db.Text
+  status      MessageStatus @default(pending)
+  sentAt      DateTime?     @map("sent_at")
+  deliveredAt DateTime?     @map("delivered_at")
+  readAt      DateTime?     @map("read_at")
+  errorMsg    String?       @map("error_msg")
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contact  Contact? @relation(fields: [contactId], references: [id])
+
+  @@index([campaignId])
+  @@index([status])
+  @@map("messages")
+}
+
+model ContactList {
+  id          Int      @id @default(autoincrement())
+  userId      Int      @map("user_id")
+  name        String
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contacts  Contact[]
+  campaigns Campaign[]
+
+  @@map("contact_lists")
+}
+
+model Contact {
+  id            Int      @id @default(autoincrement())
+  contactListId Int      @map("contact_list_id")
+  phoneNumber   String   @map("phone_number")
+  name          String?
+  email         String?
+  metadata      Json?
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  list     ContactList @relation(fields: [contactListId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@unique([contactListId, phoneNumber])
+  @@map("contacts")
+}
+
+model Payment {
+  id                    Int      @id @default(autoincrement())
+  userId                Int      @map("user_id")
+  diggionTransactionId  String?  @map("diggion_transaction_id")
+  amount                Float
+  status                String   @default("pending")
+  plan                  String?
+  planDuration          Int?     @map("plan_duration")
+  expiresAt             DateTime? @map("expires_at")
+  createdAt             DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("payments")
+}
+
+model WarmupState {
+  id               Int      @id @default(autoincrement())
+  instanceId       Int      @unique @map("instance_id")
+  running          Boolean  @default(false)
+  day              Int      @default(1)
+  phaseId          Int      @default(1) @map("phase_id")
+  startedAt        BigInt   @map("started_at")
+  lastDayAt        BigInt   @map("last_day_at")
+  sessionsToday    Int      @default(0) @map("sessions_today")
+  totalSent        Int      @default(0) @map("total_sent")
+  sessionSent      Int      @default(0) @map("session_sent")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@map("warmup_states")
+}

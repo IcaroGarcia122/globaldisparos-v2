@@ -1,50 +1,27 @@
-import { Sequelize } from 'sequelize';
-import config from './index';
+import { PrismaClient } from '@prisma/client';
 import logger from '../utils/logger';
 
-const sequelize = new Sequelize({
-  host: config.database.host,
-  port: config.database.port,
-  database: config.database.name,
-  username: config.database.user,
-  password: config.database.password,
-  dialect: 'postgres',
-  logging: config.env === 'development' ? (msg) => logger.debug(msg) : false,
-  pool: {
-    max: 10,
-    min: 0,
-    acquire: 30000,
-    idle: 10000,
-  },
-  define: {
-    timestamps: true,
-    underscored: true,
-    freezeTableName: true,
-  },
+const prisma = new PrismaClient({
+  log: process.env.NODE_ENV === 'development'
+    ? [{ emit: 'event', level: 'query' }, 'error', 'warn']
+    : ['error'],
 });
 
-export const testConnection = async (): Promise<void> => {
-  try {
-    await sequelize.authenticate();
-    logger.info('✅ Conexão com PostgreSQL estabelecida com sucesso!');
-  } catch (error) {
-    logger.error('❌ Erro ao conectar no PostgreSQL:', error);
-    throw error;
-  }
-};
+if (process.env.NODE_ENV === 'development') {
+  (prisma as any).$on('query', (e: any) => {
+    if (process.env.LOG_QUERIES === 'true') {
+      logger.debug(`[DB] ${e.query} (${e.duration}ms)`);
+    }
+  });
+}
 
-export const syncDatabase = async (force: boolean = false): Promise<void> => {
-  try {
-    // Add 30 second timeout to prevent hanging on complex migrations
-    await Promise.race([
-      sequelize.sync({ force, alter: !force && config.env === 'development' }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Database sync timeout')), 30000))
-    ]);
-    logger.info(`✅ Banco de dados sincronizado ${force ? '(FORCE)' : ''}!`);
-  } catch (error) {
-    logger.error('❌ Erro ao sincronizar banco de dados:', error);
-    throw error;
-  }
-};
+export async function connectDB(): Promise<void> {
+  await prisma.$connect();
+  logger.info('[DB] PostgreSQL conectado via Prisma');
+}
 
-export default sequelize;
+export async function disconnectDB(): Promise<void> {
+  await prisma.$disconnect();
+}
+
+export default prisma;

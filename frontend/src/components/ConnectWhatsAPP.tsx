@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { fetchAPI } from '@/config/api';
-import { QrCode, Loader2, CheckCircle2, AlertCircle, X } from 'lucide-react';
-import { initSocket, getSocket, onQRCode, onInstanceConnected, removeQRListener, removeInstanceConnectedListener, waitForSocketConnection } from '@/utils/socketClient';
+import { QrCode, Loader2, CheckCircle2, AlertCircle, X, RefreshCw } from 'lucide-react';
+import { initSocket, onQRCode, onInstanceConnected, removeQRListener, removeInstanceConnectedListener } from '@/utils/socketClient';
 
 interface ConnectWhatsAppProps {
   instanceId: string | number;
@@ -13,260 +13,143 @@ const ConnectWhatsApp: React.FC<ConnectWhatsAppProps> = ({ instanceId, onConnect
   const [loading, setLoading] = useState(false);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState('');
-  const statusCheckRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const qrPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [retrying, setRetrying] = useState(false);
 
-  // Inicializa Socket.IO quando o componente monta
+  const statusPollRef = useRef<NodeJS.Timeout | null>(null);
+  const qrPollRef = useRef<NodeJS.Timeout | null>(null);
+  const mountedRef = useRef(true);
+
   useEffect(() => {
-    try {
-      const token = localStorage.getItem('token');
-      if (token) {
-        initSocket(token);
-        console.log('✅ Socket.IO inicializado');
-      }
-    } catch (err) {
-      console.warn('⚠️ Erro ao inicializar Socket.IO:', err);
-    }
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      clearAll();
+    };
   }, []);
 
+  const clearAll = () => {
+    if (statusPollRef.current) { clearInterval(statusPollRef.current); statusPollRef.current = null; }
+    if (qrPollRef.current) { clearInterval(qrPollRef.current); qrPollRef.current = null; }
+    removeQRListener();
+    removeInstanceConnectedListener();
+  };
+
+  // Polling de status — verifica direto na Evolution API a cada 3s
+  const startStatusPolling = () => {
+    if (statusPollRef.current) clearInterval(statusPollRef.current);
+    statusPollRef.current = setInterval(async () => {
+      if (!mountedRef.current) return;
+      try {
+        const data = await fetchAPI(`/instances/${instanceId}/check-status`);
+        if (data?.status === 'connected') {
+          if (!mountedRef.current) return;
+          setConnected(true);
+          setQrCode(null);
+          clearAll();
+          if (onConnected) setTimeout(onConnected, 1500);
+        }
+      } catch { /* ignora */ }
+    }, 3000);
+  };
+
+  // Polling de QR — busca QR a cada 3s até ter imagem
+  const startQRPolling = () => {
+    if (qrPollRef.current) clearInterval(qrPollRef.current);
+    let attempts = 0;
+    qrPollRef.current = setInterval(async () => {
+      if (!mountedRef.current) return;
+      attempts++;
+      try {
+        const data = await fetchAPI(`/instances/${instanceId}/qr`);
+        if (data?.status === 'connected') {
+          setConnected(true);
+          setQrCode(null);
+          clearAll();
+          if (onConnected) setTimeout(onConnected, 1500);
+          return;
+        }
+        if (data?.qrCode) {
+          setQrCode(data.qrCode);
+          setLoading(false);
+          clearInterval(qrPollRef.current!);
+          qrPollRef.current = null;
+          startStatusPolling();
+        }
+      } catch { /* ignora */ }
+      if (attempts > 30) {
+        clearInterval(qrPollRef.current!);
+        qrPollRef.current = null;
+        if (mountedRef.current) { setLoading(false); setError('QR Code não disponível. Tente novamente.'); }
+      }
+    }, 3000);
+  };
+
   const connect = async () => {
+    clearAll();
     setLoading(true);
     setError('');
     setQrCode(null);
+    setConnected(false);
+
+    // Inicializa socket para receber eventos em tempo real
+    try {
+      const token = localStorage.getItem('token') || localStorage.getItem('authToken');
+      if (token) {
+        initSocket(token);
+        // Socket como canal primário
+        onQRCode((data) => {
+          if (data.instanceId === Number(instanceId) && mountedRef.current) {
+            setQrCode(data.qrCode);
+            setLoading(false);
+            if (qrPollRef.current) { clearInterval(qrPollRef.current); qrPollRef.current = null; }
+            startStatusPolling();
+          }
+        });
+        onInstanceConnected((data) => {
+          if (data.instanceId === Number(instanceId) && mountedRef.current) {
+            setConnected(true);
+            setQrCode(null);
+            clearAll();
+            if (onConnected) setTimeout(onConnected, 1500);
+          }
+        });
+      }
+    } catch { /* socket opcional */ }
 
     try {
-      // Verificar token
-      const token = localStorage.getItem('token');
-      if (!token) {
-        setError('Você precisa fazer login primeiro');
-        setLoading(false);
-        return;
-      }
+      const res = await fetchAPI(`/instances/${instanceId}/connect`, { method: 'POST' });
 
-      console.log(`🔗 Iniciando conexão para instância ${instanceId}`);
-
-      // 1. Inicializa Socket.IO se não estiver já
-      initSocket(token);
-
-      // 2. Aguarda conexão do Socket.IO
-      console.log(`⏳ Aguardando conexão Socket.IO...`);
-      try {
-        await waitForSocketConnection();
-        console.log(`✅ Socket.IO conectado!`);
-      } catch (socketError: any) {
-        console.warn(`⚠️ Socket.IO timeout, continuando mesmo assim:`, socketError.message);
-        // Continua mesmo com erro de socket - pode ainda funcionar
-      }
-
-      // 3. Registra listeners para QR e conexão
-      onQRCode((data) => {
-        if (data.instanceId === Number(instanceId)) {
-          console.log(`✅ QR Code recebido via WebSocket para instância ${instanceId}!`);
-          setQrCode(data.qrCode);
-          setLoading(false);
-          // Limpar polling quando QR é recebido via WebSocket
-          if (qrPollRef.current) {
-            clearInterval(qrPollRef.current);
-            qrPollRef.current = null;
-          }
-        }
-      });
-
-      // Escutar evento de conexão bem-sucedida
-      onInstanceConnected((data) => {
-        if (data.instanceId === Number(instanceId)) {
-          console.log(`✅✅✅ CONEXÃO ESTABELECIDA COM SUCESSO! ✅✅✅ Número: ${data.phoneNumber}`);
-          setConnected(true);
-          setQrCode(null);
-          setError('');
-          removeQRListener();
-          removeInstanceConnectedListener();
-          
-          if (statusCheckRef.current) {
-            clearInterval(statusCheckRef.current);
-            statusCheckRef.current = null;
-          }
-
-          if (onConnected) {
-            onConnected();
-          }
-        }
-      });
-
-      // 4. Chamar endpoint para iniciar conexão
-      const connectResponse = await fetchAPI(`/instances/${instanceId}/connect`, {
-        method: 'POST'
-      });
-      
-      console.log('✅ Conexão iniciada, aguardando QR code via WebSocket...', connectResponse);
-
-      // Se a resposta já tem QR code, usa imediatamente
-      if (connectResponse?.qrCode) {
-        console.log(`✅ QR Code retornado imediatamente da resposta POST!`);
-        setQrCode(connectResponse.qrCode);
-        setLoading(false);
-        if (qrPollRef.current) {
-          clearInterval(qrPollRef.current);
-          qrPollRef.current = null;
-        }
-        return;
-      }
-
-      // Busca o QR code imediatamente após conexão iniciada
-      // (pode não vir imediatamente via WebSocket, então faz fallback com polling)
-      let qrAttempts = 0;
-      const maxQRAttempts = 45; // 45 tentativas = até 90 segundos com backoff
-      
-      qrPollRef.current = setInterval(async () => {
-        qrAttempts++;
-        try {
-          const qrResponse = await fetchAPI(`/instances/${instanceId}/qr`, {
-            method: 'GET'
-          });
-          
-          console.log(`[QR-FETCH] Tentativa ${qrAttempts}/${maxQRAttempts}: status=${qrResponse?.status}, hasQR=${!!qrResponse?.qrCode}`);
-          
-          if (qrResponse?.qrCode) {
-            console.log(`✅ QR Code obtido via polling (tentativa ${qrAttempts})!`);
-            setQrCode(qrResponse.qrCode);
-            setLoading(false);
-            if (qrPollRef.current) {
-              clearInterval(qrPollRef.current);
-              qrPollRef.current = null;
-            }
-          } else if (qrResponse?.status === 'awaiting') {
-            // QR ainda não pronto, mas está aguardando
-            console.log(`⏳ QR aguardando (tentativa ${qrAttempts}/${maxQRAttempts})...`);
-          } else if (qrAttempts >= maxQRAttempts) {
-            // Após max tentativas, parar
-            console.warn(`⚠️ QR code não gerado após ${qrAttempts} tentativas (${qrAttempts * 2}s)`);
-            if (qrPollRef.current) {
-              clearInterval(qrPollRef.current);
-              qrPollRef.current = null;
-            }
-            setLoading(false);
-          }
-        } catch (error: any) {
-          console.warn(`⚠️ Erro ao buscar QR via polling (tentativa ${qrAttempts}):`, error?.message);
-          if (qrAttempts >= maxQRAttempts) {
-            if (qrPollRef.current) {
-              clearInterval(qrPollRef.current);
-              qrPollRef.current = null;
-            }
-            setError('Erro ao obter QR Code. Tente novamente.');
-            setLoading(false);
-          }
-        }
-      }, 2000); // Polling a cada 2 segundos
-
-      // Timeout de 5 minutos inicia apenas depois que começou o loading
-      const timeoutMs = 300000; // 5 minutos
-      const timeoutHandle = setTimeout(() => {
-        if (loading) {
-          console.error('❌ Timeout de 5 minutos excedido');
-          setError('Tempo esgotado. QR code não foi gerado. Tente novamente.');
-          setLoading(false);
-          if (qrPollRef.current) {
-            clearInterval(qrPollRef.current);
-            qrPollRef.current = null;
-          }
-          removeQRListener();
-          removeInstanceConnectedListener();
-        }
-      }, timeoutMs);
-
-    } catch (error: any) {
-      console.error('❌ Erro ao conectar:', error);
-      setError(error.message || 'Erro ao conectar WhatsApp');
-      setLoading(false);
-      removeQRListener();
-      removeInstanceConnectedListener();
-    }
-  };
-
-  const disconnect = async () => {
-    try {
-      await fetchAPI(`/instances/${instanceId}`, {
-        method: 'DELETE'
-      });
-      setConnected(false);
-      setQrCode(null);
-      removeQRListener();
-      removeInstanceConnectedListener();
-      if (statusCheckRef.current) clearInterval(statusCheckRef.current);
-    } catch (error: any) {
-      console.error('Erro ao desconectar:', error);
-    }
-  };
-
-  // Verifica o status de conexão da instância
-  const checkConnectionStatus = async () => {
-    try {
-      const response = await fetchAPI(`/instances/${instanceId}`, {
-        method: 'GET'
-      });
-      
-      if (response && response.status === 'connected') {
-        console.log('✅✅✅ CONEXÃO ESTABELECIDA COM SUCESSO! ✅✅✅');
+      if (res?.status === 'connected' || res?.qrCode === null && res?.message?.includes('conectado')) {
         setConnected(true);
-        // Limpar polling quando conexão é estabelecida
-        if (qrPollRef.current) clearInterval(qrPollRef.current);
-        setError('');
-        
-        // Para o polling de verificação
-        if (statusCheckRef.current) {
-          clearInterval(statusCheckRef.current);
-          statusCheckRef.current = null;
-        }
+        setLoading(false);
+        clearAll();
+        if (onConnected) setTimeout(onConnected, 1500);
+        return;
       }
-    } catch (error: any) {
-      console.warn('⏳ Aguardando conexão...', error.message);
+
+      if (res?.qrCode) {
+        setQrCode(res.qrCode);
+        setLoading(false);
+        startStatusPolling();
+        return;
+      }
+
+      // QR ainda não disponível — começa polling
+      startQRPolling();
+
+    } catch (err: any) {
+      if (mountedRef.current) {
+        setError(err.message || 'Erro ao conectar');
+        setLoading(false);
+      }
     }
   };
 
-  // Quando QR code é gerado, começa a verificar o status de conexão
-  useEffect(() => {
-    if (qrCode && !connected) {
-      console.log('🔍 Começando a monitorar status de conexão...');
-      
-      if (statusCheckRef.current) {
-        clearInterval(statusCheckRef.current);
-      }
-      
-      // Verifica status a cada 2 segundos
-      statusCheckRef.current = setInterval(() => {
-        checkConnectionStatus();
-      }, 2000);
-    }
-    
-    return () => {
-      if (statusCheckRef.current) {
-        clearInterval(statusCheckRef.current);
-      }
-    };
-  }, [qrCode, connected]);
-
-  // Auto-reload na conexão bem-sucedida
-  useEffect(() => {
-    if (connected) {
-      console.log('🎉 Conexão bem-sucedida, fechando modal em 2 segundos...');
-      const timer = setTimeout(() => {
-        if (onConnected) onConnected();
-      }, 2000);
-      
-      return () => clearTimeout(timer);
-    }
-  }, [connected, onConnected]);
-
-  // Cleanup quando componente desmontar
-  useEffect(() => {
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      if (statusCheckRef.current) clearInterval(statusCheckRef.current);
-      if (qrPollRef.current) clearInterval(qrPollRef.current);
-    };
-  }, [instanceId]);
+  const handleRetry = async () => {
+    setRetrying(true);
+    await connect();
+    setRetrying(false);
+  };
 
   return (
     <div className="bg-[#1c2433] border border-white/5 p-6 rounded-2xl">
@@ -276,31 +159,22 @@ const ConnectWhatsApp: React.FC<ConnectWhatsAppProps> = ({ instanceId, onConnect
           Conectar WhatsApp
         </h2>
         {(qrCode || connected) && (
-          <button
-            onClick={() => {
-              if (intervalRef.current) clearInterval(intervalRef.current);
-              if (qrPollRef.current) clearInterval(qrPollRef.current);
-              setQrCode(null);
-              setLoading(false);
-              setError('');
-            }}
-            className="text-slate-500 hover:text-white transition-colors"
-          >
+          <button onClick={() => { clearAll(); setQrCode(null); setLoading(false); setError(''); }}
+            className="text-slate-500 hover:text-white transition-colors">
             <X size={20} />
           </button>
         )}
       </div>
 
+      {/* Botão inicial */}
       {!qrCode && !connected && !loading && (
-        <button
-          onClick={connect}
-          className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-4 rounded-xl font-black text-sm uppercase tracking-widest transition-all shadow-xl shadow-emerald-500/30 disabled:opacity-50 flex items-center justify-center gap-2 active:scale-95"
-        >
-          <QrCode size={20} />
-          Gerar QR Code
+        <button onClick={connect}
+          className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-4 rounded-xl font-black text-sm uppercase tracking-widest transition-all shadow-xl shadow-emerald-500/30 flex items-center justify-center gap-2 active:scale-95">
+          <QrCode size={20} /> Gerar QR Code
         </button>
       )}
 
+      {/* Loading */}
       {loading && !qrCode && (
         <div className="text-center py-8">
           <Loader2 size={40} className="animate-spin text-emerald-500 mx-auto mb-4" />
@@ -309,49 +183,46 @@ const ConnectWhatsApp: React.FC<ConnectWhatsAppProps> = ({ instanceId, onConnect
         </div>
       )}
 
+      {/* QR Code */}
       {qrCode && !connected && (
         <div className="text-center space-y-4">
           <div className="bg-white p-4 rounded-2xl inline-block">
             <img src={qrCode} alt="QR Code WhatsApp" className="w-64 h-64" />
           </div>
           <div>
-            <p className="text-white font-black text-lg mb-1">QR Code Gerado!</p>
-            <p className="text-slate-400 text-sm font-medium">
-              Escaneie o código com seu WhatsApp
-            </p>
-            <p className="text-slate-600 text-xs mt-3">
-              WhatsApp → Aparelhos Conectados → Conectar Aparelho
-            </p>
+            <p className="text-white font-black text-lg mb-1">Escaneie o QR Code</p>
+            <p className="text-slate-400 text-sm">WhatsApp → Aparelhos Conectados → Conectar Aparelho</p>
           </div>
-        </div>
-      )}
-
-      {connected && (
-        <div className="text-center py-8 space-y-4 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-6">
-          <CheckCircle2 size={56} className="text-emerald-500 mx-auto animate-bounce" />
-          <div>
-            <p className="text-emerald-400 font-black text-2xl uppercase tracking-widest">
-              ✅ Conexão Estabelecida com Sucesso!
-            </p>
-            <p className="text-emerald-300 text-sm mt-2 font-medium">
-              Seu WhatsApp foi conectado e está pronto para uso
-            </p>
+          <div className="flex items-center justify-center gap-2 text-slate-500 text-xs">
+            <Loader2 size={12} className="animate-spin" />
+            <span>Aguardando conexão...</span>
           </div>
-          <button
-            onClick={disconnect}
-            className="w-full mt-6 bg-rose-600/20 hover:bg-rose-600/30 text-rose-500 border border-rose-500/30 py-2 rounded-xl font-black text-xs uppercase tracking-widest transition-all"
-          >
-            Desconectar
+          <button onClick={handleRetry} disabled={retrying}
+            className="flex items-center gap-1 text-xs text-slate-500 hover:text-brand-400 underline mx-auto transition-colors">
+            <RefreshCw size={12} className={retrying ? 'animate-spin' : ''} />
+            QR expirou? Gerar novo
           </button>
         </div>
       )}
 
+      {/* Conectado */}
+      {connected && (
+        <div className="text-center py-8 space-y-4 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-6">
+          <CheckCircle2 size={56} className="text-emerald-500 mx-auto animate-bounce" />
+          <p className="text-emerald-400 font-black text-xl uppercase tracking-widest">✅ Conectado!</p>
+          <p className="text-emerald-300 text-sm">WhatsApp conectado e pronto para uso</p>
+        </div>
+      )}
+
+      {/* Erro */}
       {error && (
         <div className="bg-rose-500/10 border border-rose-500/20 rounded-xl p-4 mt-4 flex items-start gap-3">
-          <AlertCircle size={18} className="text-rose-500 mt-0.5 flex-shrink-0" />
-          <div>
-            <p className="text-rose-500 text-sm font-medium">Erro</p>
-            <p className="text-rose-400 text-xs mt-1">{error}</p>
+          <AlertCircle size={18} className="text-rose-500 mt-0.5 shrink-0" />
+          <div className="flex-1">
+            <p className="text-rose-400 text-sm">{error}</p>
+            <button onClick={connect} className="text-xs text-rose-400 underline mt-2 hover:text-rose-300">
+              Tentar novamente
+            </button>
           </div>
         </div>
       )}

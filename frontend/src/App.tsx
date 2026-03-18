@@ -14,6 +14,8 @@ import AdminDashboard from "./pages/AdminDashboard";
 import PaymentApproved from "./pages/PaymentApproved";
 import WhatsAppSAASPage from "./pages/WhatsAppSAAS";
 import NotFound from "./pages/NotFound";
+import InvitePage from "./pages/InvitePage";
+import { ForgotPassword, ResetPassword } from "./pages/ResetPassword";
 
 const queryClient = new QueryClient();
 
@@ -63,6 +65,9 @@ const App = () => {
               <Route path="/payment-approved" element={<PaymentApproved />} />
               <Route path="/whatsapp" element={<WhatsAppSAASPage />} />
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+              <Route path="/invite/:token" element={<InvitePage />} />
+              <Route path="/forgot-password" element={<ForgotPassword />} />
+              <Route path="/reset-password/:token" element={<ResetPassword />} />
               <Route path="*" element={<NotFound />} />
             </Routes>
 

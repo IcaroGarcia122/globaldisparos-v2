@@ -32,6 +32,9 @@ export async function fetchAPI(endpoint: string, options: FetchOptions = {}) {
 
   console.log('%c📡 Enviando requisição fetch...', 'color: cyan;');
   
+  // Passa signal de AbortController se fornecido
+  if (options.signal) config.signal = options.signal;
+
   let response: Response;
   try {
     response = await fetch(fullUrl, config);
@@ -58,6 +61,11 @@ export async function fetchAPI(endpoint: string, options: FetchOptions = {}) {
   if (!response.ok) {
     const errorMsg = data.error || `Erro HTTP ${response.status}`;
     console.log(`%c❌ Requisição falhou: ${errorMsg}`, 'color: red;');
+    // Para send-single: retornar dados mesmo em erro para o caller decidir
+    // O caller verifica result?.success para saber se deu certo
+    if (data && typeof data === 'object') {
+      return { ...data, _httpStatus: response.status, _error: errorMsg };
+    }
     throw new Error(errorMsg);
   }
 

@@ -3,7 +3,6 @@ import react from "@vitejs/plugin-react-swc";
 import path from "path";
 import { componentTagger } from "lovable-tagger";
 
-// https://vitejs.dev/config/
 export default defineConfig(({ mode }) => ({
   server: {
     host: "localhost",
@@ -15,6 +14,8 @@ export default defineConfig(({ mode }) => ({
       '/api': {
         target: 'http://127.0.0.1:3001',
         changeOrigin: true,
+        timeout: 300000,        // 5 minutos — aguenta sync de grupos
+        proxyTimeout: 300000,   // 5 minutos no proxy também
       },
     },
   },

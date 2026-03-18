@@ -1,307 +1,182 @@
-import { runWebhookStartup } from './utils/webhookStartup';
-import express, { Express } from 'express';
+/**
+ * GlobalDisparos — Backend Enterprise v2.0
+ * Express + Prisma + Socket.IO + BullMQ
+ */
+
+import 'dotenv/config';
+import http from 'http';
+import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
-import { Server } from 'socket.io';
-import http from 'http';
-import config from './config';
-import logger from './utils/logger';
-import { testConnection, syncDatabase } from './config/database';
-import { WhatsAppInstance, User } from './models';
-import whatsappService from './adapters/whatsapp.config';
-import antiBanService from './services/antiBanService';
 import cron from 'node-cron';
+import bcrypt from 'bcryptjs';
 
-// ===================================
-// PRODUCTION-GRADE MODULES
-// ===================================
-import envConfig from './config/validation';
-import { globalRateLimiter, authRateLimiter, apiRateLimiter, statusPollingRateLimiter } from './middleware/rateLimiting';
-import { setupSecurityHeaders, setupCORS, setupAdditionalSecurityMiddleware } from './middleware/securityHeaders';
-import { setupGlobalErrorHandler, asyncHandler } from './middleware/errorHandler';
-import redisService from './services/redisService';
-import queueService from './services/queueService';
-import auditService, { AuditAction } from './services/auditService';
-import jwtService from './utils/jwt';
-import websocketService from './services/websocketService';
+import logger from './utils/logger';
+import { connectDB } from './config/database';
+import { connectRedis } from './config/redis';
+import { setupSocketServer } from './sockets/socket.server';
+import { globalLimiter } from './middlewares/rateLimiter';
+import prisma from './config/database';
 
-const app: Express = express();
+// ─── ROTAS ───────────────────────────────────────────────────────────────────
+import authRoutes     from './modules/auth/auth.routes';
+import instanceRoutes from './modules/instance/instance.routes';
+import groupRoutes    from './modules/group/group.routes';
+import campaignRoutes from './modules/campaign/campaign.routes';
+import webhookRoutes  from './modules/webhook/webhook.routes';
+import listRoutes     from './modules/list/list.routes';
+import statsRoutes    from './modules/stats/stats.routes';
+import warmupRoutes   from './modules/warmup/warmup.routes';
+
+const app = express();
 const server = http.createServer(app);
 
-// ===================================
-// SOCKET.IO
-// ===================================
-export const io = new Server(server, {
-  cors: {
-    origin: config.frontendUrl,
-    methods: ['GET', 'POST'],
-    credentials: true,
-  },
-  transports: ['websocket', 'polling'],
-  path: '/socket.io/',
-  serveClient: false,
-});
+// ─── SOCKET.IO ────────────────────────────────────────────────────────────────
+setupSocketServer(server);
 
-// MIDDLEWARE DE AUTENTICACAO PARA SOCKET.IO
-io.use((socket, next) => {
-  const token = socket.handshake.auth?.token
-             || socket.handshake.headers?.authorization?.replace('Bearer ', '');
-
-  if (!token) {
-    console.warn(`[SOCKET-AUTH] Nenhum token fornecido para socket ${socket.id}`);
-    socket.data.userId = null;
-    socket.data.authenticated = false;
-    return next();
-  }
-
-  try {
-    const decoded = jwtService.verifyAccessToken(token) as any;
-    socket.data.userId = decoded.userId || decoded.id;
-    socket.data.authenticated = true;
-    console.log(`[SOCKET-AUTH] Socket ${socket.id} autenticado para userId: ${socket.data.userId}`);
-    next();
-  } catch (err: any) {
-    console.error(`[SOCKET-AUTH] Token invalido para socket ${socket.id}:`, err.message);
-    socket.data.userId = null;
-    socket.data.authenticated = false;
-    return next();
-  }
-});
-
-io.on('connection', (socket) => {
-  logger.info(`Cliente conectado via Socket.IO: ${socket.id}`);
-
-  if (socket.data.userId) {
-    websocketService.registerUserSocket(socket, socket.data.userId);
-    socket.join(`user:${socket.data.userId}`);
-    socket.join(`user-${socket.data.userId}`);
-    logger.info(`Socket ${socket.id} registrado para usuario ${socket.data.userId}`);
-  }
-
-  socket.on('register_socket', (data: any) => {
-    logger.info(`[REGISTER-SOCKET] Socket ${socket.id} registrado via evento do frontend`);
-  });
-
-  socket.on('disconnect', () => {
-    logger.info(`Cliente desconectado: ${socket.id}`);
-  });
-
-  socket.on('error', (error) => {
-    logger.error(`Socket.IO erro para ${socket.id}:`, error);
-  });
-});
-
-// ===================================
-// MIDDLEWARES
-// ===================================
-app.use(helmet());
-setupSecurityHeaders(app);
-setupCORS(app);
-app.use(setupAdditionalSecurityMiddleware);
-app.use(compression());
-app.use(globalRateLimiter);
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
-// ===================================
-// ROTAS
-// ===================================
-import authRoutes from './routes/auth';
-import instanceRoutes from './routes/instances';
-import contactRoutes from './routes/contacts';
-import campaignRoutes from './routes/campaigns';
-import groupRoutes from './routes/groups';
-import disparadorRoutes from './routes/disparador';
-import statsRoutes from './routes/stats';
-import webhookRoutes from './routes/webhook';
-
-app.use('/api/auth', authRateLimiter, authRoutes);
-app.use('/api/instances', statusPollingRateLimiter, instanceRoutes);
-app.use('/api/contacts', apiRateLimiter, contactRoutes);
-app.use('/api/campaigns', apiRateLimiter, campaignRoutes);
-app.use('/api/disparador', apiRateLimiter, disparadorRoutes);
-app.use('/api/groups', apiRateLimiter, groupRoutes);
-app.use('/api/stats', apiRateLimiter, statsRoutes);
-app.use('/api/webhook', webhookRoutes);
-
-// Health check
-app.get('/health', asyncHandler(async (req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    environment: envConfig.nodeEnv,
-  });
+// ─── MIDDLEWARES ──────────────────────────────────────────────────────────────
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 }));
+app.use(compression());
+app.use(globalLimiter);
+app.use(express.json({ limit: '20mb' }));
+app.use(express.urlencoded({ extended: true, limit: '20mb' }));
+
+// ─── HEALTH CHECK ─────────────────────────────────────────────────────────────
+app.get('/health', (_, res) => res.json({ status: 'ok', uptime: process.uptime(), timestamp: new Date() }));
+app.get('/api/health', (_, res) => res.json({ status: 'ok' }));
+
+// ─── ROTAS DA API ─────────────────────────────────────────────────────────────
+app.use('/api/auth',       authRoutes);
+app.use('/api/instances',  instanceRoutes);
+app.use('/api/groups',     groupRoutes);
+app.use('/api/disparador', campaignRoutes);  // /api/disparador/iniciar, send-single, etc.
+app.use('/api/campaigns',  campaignRoutes);  // /api/campaigns (CampaignDispatcher, CampaignDashboard)
+app.use('/api/webhook',    webhookRoutes);
+app.use('/api/contacts',   listRoutes);
+app.use('/api/stats',      statsRoutes);
+app.use('/api/warmup',     warmupRoutes);
 
 // 404
 app.use((req, res) => {
-  res.status(404).json({ error: 'Not Found', path: req.path, method: req.method });
+  logger.warn(`[404] ${req.method} ${req.path}`);
+  res.status(404).json({ error: 'Rota não encontrada', path: req.path });
 });
 
-// Global error handler
-setupGlobalErrorHandler(app);
+// ─── STARTUP ──────────────────────────────────────────────────────────────────
+async function start() {
+  const PORT = parseInt(process.env.PORT || '3001');
+  const HOST = process.env.HOST || '0.0.0.0';
 
-// ===================================
-// INICIALIZACAO
-// ===================================
-const startServer = async (): Promise<void> => {
+  // 1. Database
   try {
-    logger.info('Validating environment configuration...');
-
-    // Database
-    try {
-      await Promise.race([
-        testConnection(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Database connection timeout')), 8000))
-      ]);
-      logger.info('Database connected');
-    } catch (dbError) {
-      logger.warn('Database connection failed, continuando...');
-    }
-
-    try {
-      await Promise.race([
-        syncDatabase(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Database sync timeout')), 10000))
-      ]);
-      logger.info('Database synchronized');
-    } catch (syncError) {
-      logger.warn('Database sync failed (will retry later)');
-    }
-
-    // Admin user
-    try {
-      const bcrypt = require('bcryptjs');
-      const adminExists = await User.findOne({ where: { email: 'admin@gmail.com' } });
-      if (!adminExists) {
-        const hashedPassword = await bcrypt.hash('vip2026', 10);
-        await User.create({
-          email: 'admin@gmail.com',
-          password: hashedPassword,
-          fullName: 'Administrador',
-          role: 'admin',
-          plan: 'enterprise',
-          isActive: true
-        });
-        logger.info('Usuario admin criado: admin@gmail.com / vip2026');
-      } else {
-        logger.info('Usuario admin ja existe');
-      }
-    } catch (error) {
-      logger.error('Erro ao criar usuario admin:', error);
-    }
-
-    // Redis
-    try {
-      if (envConfig.redisHost?.trim()) {
-        const redisReady = await Promise.race([
-          redisService.ping(),
-          new Promise(resolve => setTimeout(() => resolve(false), 3000))
-        ]);
-        if (redisReady) {
-          logger.info('Redis cache service initialized');
-        } else {
-          logger.warn('Redis not available, continuing with degraded caching');
-        }
-      } else {
-        logger.warn('Redis disabled (REDIS_HOST not configured)');
-      }
-    } catch (err) {
-      logger.warn('Redis initialization failed, continuing');
-    }
-
-    // Queue
-    try {
-      await Promise.race([
-        queueService.init(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Queue init timeout')), 5000))
-      ]);
-      logger.info('Job queue service initialized');
-    } catch (err) {
-      logger.warn('Job queue service not available, some features may be limited');
-    }
-
-    logger.info('JWT token service initialized');
-
-    // Inject Socket.IO
-    try {
-      whatsappService.setSocketIO(io);
-      logger.info('Socket.IO injected into WhatsApp service');
-    } catch (error) {
-      logger.warn('Failed to inject Socket.IO into service');
-    }
-
-    // Start HTTP server
-    console.log('\n[STARTUP] EVOLUTION_API_URL:', process.env.EVOLUTION_API_URL || 'NOT SET');
-    console.log('[STARTUP] EVOLUTION_API_KEY:', process.env.EVOLUTION_API_KEY ? 'SET' : 'NOT SET\n');
-
-    server.listen(config.port, config.host, () => {
-      logger.info(`Server running on http://${config.host}:${config.port}`);
-      logger.info(`Frontend: ${config.frontendUrl}`);
-      logger.info(`Environment: ${config.env}`);
-
-      // Background tasks
-      (async () => {
-        try {
-          // Sincroniza instancias com Evolution e registra webhooks
-          try {
-            await runWebhookStartup();
-          } catch (err: any) {
-            logger.warn('Webhook startup falhou (nao critico):', err.message);
-          }
-
-          // Cron: reset diario de contadores anti-ban
-          cron.schedule('0 0 * * *', async () => {
-            logger.info('Executing daily counter reset...');
-            try {
-              await antiBanService.resetDailyCounters();
-            } catch (error) {
-              logger.error('Daily reset failed:', error);
-            }
-          });
-
-          // Cron: limpeza de jobs antigos
-          cron.schedule('0 */6 * * *', async () => {
-            logger.info('Cleaning up old queue jobs...');
-            try {
-              await queueService.addCleanupJob({ daysOld: 7 });
-            } catch (error) {
-              logger.error('Queue cleanup failed:', error);
-            }
-          });
-
-          // Cron: limpeza de audit logs
-          cron.schedule('0 3 * * *', async () => {
-            logger.info('Cleaning up old audit logs...');
-            try {
-              await auditService.deleteOldLogs(90);
-            } catch (error) {
-              logger.error('Audit cleanup failed:', error);
-            }
-          });
-
-          logger.info('Background tasks initialized');
-        } catch (error) {
-          logger.error('Error in background tasks:', error);
-        }
-      })();
-    });
-  } catch (error) {
-    logger.error('Failed to start server:', error);
+    await connectDB();
+  } catch (err: any) {
+    logger.error(`[DB] Erro de conexão: ${err.message}`);
     process.exit(1);
   }
-};
 
-process.on('unhandledRejection', (error) => {
-  logger.error('Unhandled Rejection:', error);
-});
+  // 2. Redis (opcional)
+  await connectRedis().catch(() => {});
 
-process.on('uncaughtException', (error: any) => {
-  console.error('UNCAUGHT EXCEPTION:', error);
-  logger.error('Uncaught Exception:', error);
-  process.exit(1);
-});
+  // 3. Seed admin
+  try {
+    const admin = await prisma.user.findUnique({ where: { email: 'admin@gmail.com' } });
+    if (!admin) {
+      const hash = await bcrypt.hash('vip2026', 10);
+      await prisma.user.create({
+        data: { email: 'admin@gmail.com', password: hash, fullName: 'Administrador', role: 'admin', plan: 'enterprise', isActive: true },
+      });
+      logger.info('[Seed] Admin criado: admin@gmail.com / vip2026');
+    }
+  } catch (err: any) {
+    logger.warn(`[Seed] ${err.message}`);
+  }
 
-startServer();
+  // 4. Sincronizar Evolution com banco e registrar webhooks
+  (async () => {
+    try {
+      await new Promise(r => setTimeout(r, 3000)); // aguarda server estabilizar
+
+      const wha = (await import('./services/whatsapp.service')).default;
+      const all = await wha.fetchInstances().catch(() => []);
+      if (!all.length) { logger.warn('[Startup] Evolution sem instâncias ou offline'); return; }
+
+      logger.info(`[Startup] ${all.length} instâncias encontradas na Evolution`);
+
+      const evolutionMap = new Map<string, any>();
+      for (const inst of all) {
+        if (inst.instanceName) evolutionMap.set(inst.instanceName, inst);
+      }
+
+      // Instâncias ativas no banco
+      const dbInstances = await prisma.whatsAppInstance.findMany({ where: { isActive: true } });
+
+      for (const dbInst of dbInstances) {
+        const evName = `instance_${dbInst.id}`;
+        const evInst = evolutionMap.get(evName);
+
+        if (!evInst) {
+          // Instância no banco mas não na Evolution — marca desconectada
+          if (dbInst.status === 'connected') {
+            await prisma.whatsAppInstance.update({ where: { id: dbInst.id }, data: { status: 'disconnected', qrCode: null } });
+            logger.warn(`[Startup] ${evName} não encontrada na Evolution — desconectada`);
+          }
+          continue;
+        }
+
+        // Registra webhook
+        await wha.registerWebhook(evName).catch(() => {});
+        logger.info(`[Startup] Webhook registrado: ${evName}`);
+
+        const isOpen = evInst.status === 'open';
+        if (isOpen) {
+          const owner = evInst.ownerJid || evInst.owner;
+          const phoneNumber = owner ? owner.replace('@s.whatsapp.net', '').replace('@c.us', '') : dbInst.phoneNumber;
+          await prisma.whatsAppInstance.update({
+            where: { id: dbInst.id },
+            data: { status: 'connected', qrCode: null, connectedAt: dbInst.connectedAt || new Date(), ...(phoneNumber ? { phoneNumber } : {}) },
+          });
+          logger.info(`✅ [Startup] ${evName} conectada${phoneNumber ? ` (${phoneNumber})` : ''}`);
+
+          // Emite para o frontend
+          const { emitToUser } = await import('./sockets/socket.server');
+          emitToUser(dbInst.userId, 'whatsapp_connected', { instanceId: dbInst.id, phoneNumber, status: 'connected' });
+        } else if (!isOpen && dbInst.status === 'connected') {
+          await prisma.whatsAppInstance.update({ where: { id: dbInst.id }, data: { status: 'disconnected', qrCode: null } });
+          logger.warn(`[Startup] ${evName} desconectada`);
+        }
+      }
+    } catch (err: any) {
+      logger.warn(`[Startup] Webhook startup falhou: ${err.message}`);
+    }
+  })();
+
+  // 5. Cron jobs
+  // Reset diário de contadores anti-ban
+  cron.schedule('0 0 * * *', async () => {
+    try {
+      await prisma.whatsAppInstance.updateMany({ data: { dailyMessagesSent: 0 } });
+      logger.info('[Cron] Contadores diários resetados');
+    } catch { /* ignora */ }
+  });
+
+  // 6. HTTP Server
+  server.listen(PORT, HOST, () => {
+    logger.info(`🚀 Servidor rodando em http://${HOST}:${PORT}`);
+    logger.info(`📡 WebSocket: ws://${HOST}:${PORT}`);
+    logger.info(`🌐 Frontend: ${process.env.FRONTEND_URL}`);
+    logger.info(`🗄️  Evolution: ${process.env.EVOLUTION_API_URL}`);
+  });
+}
+
+process.on('unhandledRejection', (err: any) => logger.error('[Unhandled]', err));
+process.on('uncaughtException', (err: any) => { logger.error('[Uncaught]', err); process.exit(1); });
+process.on('SIGTERM', async () => { await prisma.$disconnect(); process.exit(0); });
+
+start();

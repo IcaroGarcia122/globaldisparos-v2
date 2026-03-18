@@ -37,8 +37,8 @@ const GoalsTracker: React.FC = () => {
     const loadStats = async () => {
       setLoading(true);
       try {
-        const response = await fetchAPI('/stats/user').catch(() => ({ messagesSent: 0 }));
-        const msgCount = response?.messagesSent || 0;
+        const response = await fetchAPI('/stats/user').catch(() => ({ totalMessagesSent: 0 }));
+        const msgCount = response?.totalMessagesSent || response?.messagesSent || 0;
         setTotalMessagesSent(msgCount);
       } catch (err) {
         console.error('Erro ao carregar estatísticas:', err);
@@ -79,30 +79,40 @@ const GoalsTracker: React.FC = () => {
           return (
             <div 
               key={idx} 
-              className={`dashboard-card !p-4 border ${plaque.color} relative overflow-hidden group hover:scale-105 transition-transform duration-500`}
+              className={`dashboard-card !p-4 border ${isUnlocked ? 'border-yellow-400/50 shadow-lg shadow-yellow-500/10' : plaque.color} relative overflow-hidden group hover:scale-105 transition-transform duration-500`}
             >
+              {isUnlocked && (
+                <div className="absolute top-3 right-3 z-10 bg-yellow-400 text-black text-[8px] font-black uppercase px-2 py-1 rounded-full tracking-widest flex items-center gap-1">
+                  ⭐ Desbloqueada
+                </div>
+              )}
               <div className="bg-[#1c2433] rounded-3xl p-5 md:p-6 h-full flex flex-col">
                 <div className="aspect-square rounded-2xl overflow-hidden mb-6 relative">
                   <img 
                     src={plaque.image} 
                     alt={plaque.title} 
-                    className="w-full h-full object-cover filter grayscale opacity-40 group-hover:grayscale-0 group-hover:opacity-100 transition-all duration-700" 
+                    className={`w-full h-full object-cover transition-all duration-700 ${isUnlocked ? 'filter-none opacity-100' : 'filter grayscale opacity-40 group-hover:grayscale-0 group-hover:opacity-100'}`}
                   />
-                  <div className="absolute inset-0 bg-black/60 flex items-center justify-center group-hover:bg-transparent transition-all">
-                    {!isUnlocked && (
+                  {!isUnlocked && (
+                    <div className="absolute inset-0 bg-black/60 flex items-center justify-center group-hover:bg-transparent transition-all">
                       <div className="bg-white/10 backdrop-blur-md px-4 py-2 rounded-full border border-white/10 group-hover:hidden">
-                        <span className="text-[9px] font-black text-white uppercase tracking-widest">Bloqueado</span>
+                        <span className="text-[9px] font-black text-white uppercase tracking-widest">🔒 Bloqueada</span>
                       </div>
-                    )}
-                  </div>
+                    </div>
+                  )}
+                  {isUnlocked && (
+                    <div className="absolute inset-0 bg-gradient-to-t from-yellow-500/10 to-transparent pointer-events-none" />
+                  )}
                 </div>
-                <h3 className="text-lg md:text-xl font-black text-white italic uppercase tracking-tighter mb-1">{plaque.title}</h3>
+                <h3 className={`text-lg md:text-xl font-black italic uppercase tracking-tighter mb-1 ${isUnlocked ? 'text-yellow-300' : 'text-white'}`}>{plaque.title}</h3>
                 <div className="text-brand-500 text-[9px] font-black uppercase tracking-widest mb-4">{plaque.subtitle}</div>
                 <div className="flex-1 text-[11px] text-slate-500 font-medium leading-relaxed mb-4">{plaque.desc}</div>
-                <div className="text-[9px] text-slate-600 mb-4 italic">{totalMessagesSent.toLocaleString()} / {plaque.target.toLocaleString()} mensagens</div>
-                <div className="w-full h-1 bg-white/5 rounded-full overflow-hidden">
+                <div className={`text-[9px] mb-4 italic ${isUnlocked ? 'text-yellow-400 font-black' : 'text-slate-600'}`}>
+                  {isUnlocked ? '✅ Meta atingida!' : `${totalMessagesSent.toLocaleString()} / ${plaque.target.toLocaleString()} mensagens`}
+                </div>
+                <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden">
                   <div 
-                    className="h-full bg-brand-500 transition-all duration-500" 
+                    className={`h-full transition-all duration-700 ${isUnlocked ? 'bg-yellow-400' : 'bg-brand-500'}`}
                     style={{ width: `${progress}%` }}
                   />
                 </div>

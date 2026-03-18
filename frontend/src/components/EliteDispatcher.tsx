@@ -41,8 +41,8 @@ const DEFAULT_CONFIG: DispatchConfig = {
   sourceType: 'group',
   xlsxNumbers: [],
   messages: [''],
-  delayMin: 3000,
-  delayMax: 6000,
+  delayMin: 30000,
+  delayMax: 60000,
   excludeAdmins: false,
   skipAlreadySent: false,
   randomizeOrder: false,
@@ -62,15 +62,50 @@ const EliteDispatcher: React.FC = () => {
 
   const pollRef = useRef<NodeJS.Timeout | null>(null);
   const abortRef = useRef(false);
+  const cancelResolveRef = useRef<(() => void) | null>(null);
+  const campaignIdRef = useRef<number | null>(null);
   const sentNumbersRef = useRef<Set<string>>(new Set());
 
   // Carrega instâncias conectadas
   useEffect(() => {
+    // Carregar instâncias
     fetchAPI('/instances').then(data => {
       const list = data?.data || data || [];
       const connected = list.filter((i: Instance) => i.status === 'connected');
       setInstances(connected);
       if (connected.length === 1) setConfig(c => ({ ...c, instanceId: String(connected[0].id) }));
+    }).catch(() => {});
+
+    // Recuperar campanha ativa caso tenha feito logout/login com campanha em andamento
+    fetchAPI('/campaigns/active').then(active => {
+      if (!active) return;
+      campaignIdRef.current = active.id;
+      setCampaign({
+        status: active.status,
+        total: active.total,
+        sent: active.sent,
+        failed: active.failed,
+        skipped: active.skipped ?? 0,
+        current: active.current ?? '',
+        startedAt: active.startedAt,
+        estimatedEnd: active.estimatedEnd ?? null,
+        numbers: active.numbers ?? [],
+        currentIndex: active.currentIndex ?? active.sent,
+      });
+      if (active.instanceId) setConfig(c => ({ ...c, instanceId: active.instanceId }));
+      // Iniciar poll de progresso
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = setInterval(async () => {
+        if (!campaignIdRef.current) return;
+        try {
+          const m = await fetchAPI(`/campaigns/${campaignIdRef.current}/metricas`);
+          setCampaign(prev => prev ? { ...prev, status: m.status, sent: m.metrics.sent, failed: m.metrics.failed, total: m.metrics.total } : prev);
+          if (m.status === 'done' || m.status === 'cancelled') {
+            clearInterval(pollRef.current!);
+            pollRef.current = null;
+          }
+        } catch { /* silent */ }
+      }, 3000);
     }).catch(() => {});
   }, []);
 
@@ -155,6 +190,7 @@ const EliteDispatcher: React.FC = () => {
     if (!config.instanceId) return setError('Selecione uma instância');
     setError('');
     abortRef.current = false;
+    cancelResolveRef.current = null;
     sentNumbersRef.current = new Set();
 
     setCampaign({ status: 'loading_participants', total: 0, sent: 0, failed: 0, skipped: 0, current: '', startedAt: Date.now(), estimatedEnd: null, numbers: [], currentIndex: 0 });
@@ -193,6 +229,20 @@ const EliteDispatcher: React.FC = () => {
 
     setCampaign(c => ({ ...c!, status: 'running', total: numbers.length, numbers, startedAt: Date.now() }));
 
+    // Registrar campanha no backend para rastrear e permitir cancelamento
+    try {
+      const campaignData = await fetchAPI('/disparador/registrar', {
+        method: 'POST',
+        body: {
+          instanceId: config.instanceId,
+          message: config.messages.filter(m => m.trim())[0],
+          groupId: config.sourceType === 'group' ? config.groupId : undefined,
+          totalContacts: numbers.length,
+        },
+      });
+      campaignIdRef.current = campaignData?.campaignId || null;
+    } catch { campaignIdRef.current = null; }
+
     let sent = 0, failed = 0, skipped = 0;
 
     for (let i = 0; i < numbers.length; i++) {
@@ -223,41 +273,101 @@ const EliteDispatcher: React.FC = () => {
       const msg = getRandomMessage();
       if (!msg) { skipped++; continue; }
 
+      // AbortController para cancelar o fetch imediatamente
+      const abortCtrl = new AbortController();
+      const abortHandler = () => abortCtrl.abort();
+      // Salvar o abort do fetch atual para ser chamado ao cancelar
+      cancelResolveRef.current = abortHandler as any;
+
       try {
-        await fetchAPI('/disparador/send-single', {
+        const result = await fetchAPI('/disparador/send-single', {
           method: 'POST',
-          body: { instanceId: config.instanceId, number, message: msg }
+          body: { instanceId: config.instanceId, number, message: msg },
+          signal: abortCtrl.signal,
         });
-        sent++;
-        sentNumbersRef.current.add(number);
-      } catch {
+        if (result?.success) {
+          sent++;
+          sentNumbersRef.current.add(number);
+        } else if (result?.skipped) {
+          // Número inválido / não existe no WA — pula sem contar como falha
+          skipped++;
+        } else {
+          failed++;
+        }
+      } catch (err: any) {
+        // Se foi abortado pelo usuário, não conta como falha
+        if (err?.name === 'AbortError' || abortRef.current) {
+          break;
+        }
+        // Erro 503 = Evolution offline — para o disparo
+        if (err?.message?.includes('503') || err?.message?.includes('ECONNREFUSED')) {
+          abortRef.current = true;
+          break;
+        }
         failed++;
       }
 
+      cancelResolveRef.current = null;
+      if (abortRef.current) break;
+
       // Calcula ETA
-      const elapsed = Date.now() - (Date.now() - ((i + 1) * getRandomDelay()));
       const avgDelay = (config.delayMin + config.delayMax) / 2;
       const remaining = (numbers.length - i - 1) * avgDelay;
       const estimatedEnd = Date.now() + remaining;
 
       setCampaign(c => c ? { ...c, sent, failed, skipped, estimatedEnd } : null);
 
-      // Delay randomico
-      const delay = getRandomDelay();
-      await new Promise(r => setTimeout(r, delay));
+      // Delay cancelável — resolve imediatamente ao cancelar
+      if (!abortRef.current) {
+        const delay = getRandomDelay();
+        await new Promise<void>(resolve => {
+          let timerRef: ReturnType<typeof setTimeout>;
+          // Registrar resolve para handlePause chamar diretamente
+          cancelResolveRef.current = () => { clearTimeout(timerRef); resolve(); };
+          timerRef = setTimeout(() => {
+            cancelResolveRef.current = null;
+            resolve();
+          }, delay);
+        });
+        cancelResolveRef.current = null;
+      }
+      if (abortRef.current) break;
     }
 
-    setCampaign(c => c ? { ...c, status: abortRef.current ? 'cancelled' : 'done', current: '', estimatedEnd: null } : null);
+    const finalStatus = abortRef.current ? 'cancelled' : 'done';
+    setCampaign(c => c ? { ...c, status: finalStatus, current: '', estimatedEnd: null, sent, failed, skipped } : null);
+
+    // Finalizar campanha no backend com stats reais
+    if (campaignIdRef.current) {
+      fetchAPI(`/disparador/finalizar/${campaignIdRef.current}`, {
+        method: 'POST',
+        body: { sent, failed, status: finalStatus === 'done' ? 'completed' : 'cancelled' },
+      }).catch(() => {});
+      campaignIdRef.current = null;
+    }
   };
 
-  const handlePause = () => { abortRef.current = true; setCampaign(c => c ? { ...c, status: 'cancelled' } : null); };
+  const handlePause = () => {
+    abortRef.current = true;
+    // Resolve imediatamente qualquer delay em espera
+    if (cancelResolveRef.current) {
+      cancelResolveRef.current();
+      cancelResolveRef.current = null;
+    }
+    setCampaign(c => c ? { ...c, status: 'cancelled' } : null);
+    // Notificar backend para parar processamento
+    if (campaignIdRef.current) {
+      fetchAPI(`/disparador/cancelar/${campaignIdRef.current}`, { method: 'POST' }).catch(() => {});
+      campaignIdRef.current = null;
+    }
+  };
 
   const handleReset = () => { setCampaign(null); abortRef.current = false; };
 
   const filteredGroups = groups.filter(g => g.name.toLowerCase().includes(groupSearch.toLowerCase()));
   const selectedGroup = groups.find(g => g.id === config.groupId);
   const isCampaignActive = campaign && (campaign.status === 'running' || campaign.status === 'loading_participants');
-  const pct = campaign && campaign.total > 0 ? Math.round(((campaign.sent + campaign.failed + campaign.skipped) / campaign.total) * 100) : 0;
+  const pct = campaign && (campaign.total || 0) > 0 ? Math.round((((campaign.sent||0) + (campaign.failed||0) + (campaign.skipped||0)) / campaign.total) * 100) : 0;
 
   const formatTime = (ms: number) => {
     const s = Math.floor(ms / 1000);
@@ -302,7 +412,7 @@ const EliteDispatcher: React.FC = () => {
           <div className="space-y-2">
             <div className="flex justify-between text-xs text-slate-400">
               <span>{pct}% concluído</span>
-              <span>{campaign.sent + campaign.failed + campaign.skipped}/{campaign.total}</span>
+              <span>{(campaign.sent||0) + (campaign.failed||0) + (campaign.skipped||0)}/{campaign.total||0}</span>
             </div>
             <div className="w-full bg-slate-800 rounded-full h-3 overflow-hidden">
               <div
@@ -328,7 +438,7 @@ const EliteDispatcher: React.FC = () => {
             <div className="text-xs font-black text-slate-500 uppercase mt-1">Pulados</div>
           </div>
           <div className="dashboard-card text-center">
-            <div className="text-3xl font-black text-brand-400">{campaign.total - campaign.sent - campaign.failed - campaign.skipped}</div>
+            <div className="text-3xl font-black text-brand-400">{Math.max(0, (campaign.total || 0) - (campaign.sent || 0) - (campaign.failed || 0) - (campaign.skipped || 0))}</div>
             <div className="text-xs font-black text-slate-500 uppercase mt-1">Restantes</div>
           </div>
         </div>
@@ -533,7 +643,7 @@ const EliteDispatcher: React.FC = () => {
           <div>
             <label className="text-xs text-slate-500 mb-1 block">Delay mínimo</label>
             <div className="flex items-center gap-2">
-              <input type="range" min={500} max={30000} step={500} value={config.delayMin}
+              <input type="range" min={30000} max={120000} step={1000} value={config.delayMin}
                 onChange={e => setConfig(c => ({ ...c, delayMin: Math.min(Number(e.target.value), c.delayMax - 500) }))}
                 className="flex-1" />
               <span className="text-white text-sm w-14 text-right">{(config.delayMin / 1000).toFixed(1)}s</span>
@@ -542,7 +652,7 @@ const EliteDispatcher: React.FC = () => {
           <div>
             <label className="text-xs text-slate-500 mb-1 block">Delay máximo</label>
             <div className="flex items-center gap-2">
-              <input type="range" min={1000} max={60000} step={500} value={config.delayMax}
+              <input type="range" min={31000} max={180000} step={1000} value={config.delayMax}
                 onChange={e => setConfig(c => ({ ...c, delayMax: Math.max(Number(e.target.value), c.delayMin + 500) }))}
                 className="flex-1" />
               <span className="text-white text-sm w-14 text-right">{(config.delayMax / 1000).toFixed(1)}s</span>

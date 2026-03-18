@@ -39,6 +39,12 @@ const UserDashboard: React.FC = () => {
   const [newListName, setNewListName] = useState('');
   const [totalMessagesSent, setTotalMessagesSent] = useState(0);
   const [showInstanceSuccessMessage, setShowInstanceSuccessMessage] = useState(false);
+  const [stats, setStats] = useState<any>({ totalMessagesSent: 0, totalMessagesFailed: 0, successRate: '0%', connectedInstances: 0, totalInstances: 0, runningCampaigns: 0 });
+  const [logs, setLogs] = useState<any[]>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [logsPage, setLogsPage] = useState(1);
+  const [logsTotal, setLogsTotal] = useState(0);
+  const [logsLoaded, setLogsLoaded] = useState(false);
 
   // Carregar instâncias do usuário
   const reloadInstances = async () => {
@@ -91,13 +97,44 @@ const UserDashboard: React.FC = () => {
     }
   };
 
-  // Carregar dados de disparos
+  // Carregar dados de disparos e stats
   const loadDisparoStats = async () => {
     try {
       const data = await fetchAPI('/stats/user');
       setTotalMessagesSent(data.totalMessagesSent || 0);
+      setStats(data);
     } catch (error) {
       console.error('Erro ao carregar estatísticas:', error);
+    }
+  };
+
+  // Recarregar stats e instâncias ao entrar na dashboard
+  useEffect(() => {
+    // Scroll para o topo ao mudar de aba
+    window.scrollTo({ top: 0, behavior: 'instant' });
+
+    if (activeTab === 'dashboard' || activeTab === 'conquistas') {
+      loadDisparoStats();
+      reloadInstances();
+    }
+    if (activeTab === 'logs') {
+      setLogsLoaded(false);
+    }
+  }, [activeTab]);
+
+  // Carregar logs de atividade
+  const loadLogs = async (page = 1) => {
+    setLogsLoading(true);
+    try {
+      const data = await fetchAPI(`/stats/logs?page=${page}&limit=50`);
+      setLogs(data?.logs || []);
+      setLogsTotal(data?.pagination?.total || 0);
+      setLogsPage(page);
+    } catch (error) {
+      console.error('Erro ao carregar logs:', error);
+    } finally {
+      setLogsLoading(false);
+      setLogsLoaded(true);
     }
   };
 
@@ -192,12 +229,18 @@ const UserDashboard: React.FC = () => {
                   <Plus size={16} />
                   Conectar WhatsApp
                 </button>
-                <div className="flex items-center gap-3 px-5 py-3 rounded-xl border bg-white/5 border-white/5 text-slate-600">
-                  <div className="w-2 h-2 rounded-full bg-slate-700" />
-                  <span className="text-[10px] font-black uppercase tracking-widest">
-                    {instances.length > 0 ? 'Conectado' : 'Desconectado'}
-                  </span>
-                </div>
+                {(() => {
+                  const connected = instances.filter(i => i.status === 'connected');
+                  const isConn = connected.length > 0;
+                  return (
+                    <div className={`flex items-center gap-3 px-5 py-3 rounded-xl border ${isConn ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-white/5 border-white/5 text-slate-600'}`}>
+                      <div className={`w-2 h-2 rounded-full ${isConn ? 'bg-emerald-400 animate-pulse' : 'bg-slate-700'}`} />
+                      <span className="text-[10px] font-black uppercase tracking-widest">
+                        {isConn ? `Conectado (${connected.length})` : 'Desconectado'}
+                      </span>
+                    </div>
+                  );
+                })()}
               </div>
             </header>
 
@@ -400,38 +443,108 @@ const UserDashboard: React.FC = () => {
             )}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-              {[
-                { label: 'MENSAGENS ENVIADAS', val: '0', badge: 'VOLUME TOTAL', icon: <Zap size={18} />, color: 'text-emerald-500' },
-                { label: 'TAXA DE ENTREGA', val: '0%', badge: 'ESTABILIDADE', icon: <BarChart3 size={18} />, color: 'text-brand-500' },
-                { label: 'FALHAS DETECTADAS', val: '0', badge: 'ERROS TÉCNICOS', icon: <AlertCircle size={18} />, color: 'text-rose-500' }
-              ].map((s, i) => (
-                <div key={i} className="dashboard-card flex flex-col justify-between relative overflow-hidden group hover:scale-105 transition-transform text-center">
-                  <div className="flex justify-center mb-6">
-                    <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-slate-500 border border-white/10">{s.icon}</div>
-                  </div>
-                  <span className="text-[8px] font-black text-slate-500 uppercase border border-white/5 px-2 py-1 rounded tracking-tighter mx-auto mb-4">{s.badge}</span>
-                  <div>
-                    <div className="text-[9px] font-black text-slate-500 uppercase mb-2">{s.label}</div>
-                    <div className="text-3xl md:text-4xl font-black text-white italic tracking-tighter">{s.val}</div>
-                  </div>
+              <div className="dashboard-card flex flex-col justify-between relative overflow-hidden group hover:scale-105 transition-transform text-center">
+                <div className="flex justify-center mb-6">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-500 border border-emerald-500/20"><Zap size={18} /></div>
                 </div>
-              ))}
+                <span className="text-[8px] font-black text-slate-500 uppercase border border-white/5 px-2 py-1 rounded tracking-tighter mx-auto mb-4">VOLUME TOTAL</span>
+                <div>
+                  <div className="text-[9px] font-black text-slate-500 uppercase mb-2">MENSAGENS ENVIADAS</div>
+                  <div className="text-3xl md:text-4xl font-black text-emerald-400 italic tracking-tighter">{(stats.totalMessagesSent || 0).toLocaleString('pt-BR')}</div>
+                  <div className="text-[9px] text-slate-600 mt-2">{stats.totalCampaigns || 0} campanha(s) realizadas</div>
+                </div>
+              </div>
+              <div className="dashboard-card flex flex-col justify-between relative overflow-hidden group hover:scale-105 transition-transform text-center">
+                <div className="flex justify-center mb-6">
+                  <div className="w-10 h-10 rounded-xl bg-brand-500/10 flex items-center justify-center text-brand-500 border border-brand-500/20"><BarChart3 size={18} /></div>
+                </div>
+                <span className="text-[8px] font-black text-slate-500 uppercase border border-white/5 px-2 py-1 rounded tracking-tighter mx-auto mb-4">ESTABILIDADE</span>
+                <div>
+                  <div className="text-[9px] font-black text-slate-500 uppercase mb-2">TAXA DE ENTREGA</div>
+                  <div className="text-3xl md:text-4xl font-black text-brand-400 italic tracking-tighter">{stats.successRate || '0%'}</div>
+                  <div className="text-[9px] text-slate-600 mt-2">{stats.runningCampaigns || 0} ativa(s) agora</div>
+                </div>
+              </div>
+              <div className="dashboard-card flex flex-col justify-between relative overflow-hidden group hover:scale-105 transition-transform text-center">
+                <div className="flex justify-center mb-6">
+                  <div className="w-10 h-10 rounded-xl bg-rose-500/10 flex items-center justify-center text-rose-500 border border-rose-500/20"><AlertCircle size={18} /></div>
+                </div>
+                <span className="text-[8px] font-black text-slate-500 uppercase border border-white/5 px-2 py-1 rounded tracking-tighter mx-auto mb-4">ERROS TÉCNICOS</span>
+                <div>
+                  <div className="text-[9px] font-black text-slate-500 uppercase mb-2">FALHAS DETECTADAS</div>
+                  <div className="text-3xl md:text-4xl font-black text-rose-400 italic tracking-tighter">{(stats.totalMessagesFailed || 0).toLocaleString('pt-BR')}</div>
+                  <div className="text-[9px] text-slate-600 mt-2">erros de envio</div>
+                </div>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-              <div className="lg:col-span-2 dashboard-card flex flex-col items-center justify-center min-h-[300px]">
-                <h3 className="text-xl font-black text-white italic uppercase mb-8 self-start">Fluxo de Disparos</h3>
-                <div className="flex flex-col items-center gap-4 opacity-20">
-                  <BarChart3 size={64} className="text-slate-600" strokeWidth={1} />
-                  <span className="text-[10px] font-black uppercase tracking-[0.4em]">Aguardando dados...</span>
-                </div>
+              {/* Fluxo de Disparos */}
+              <div className="lg:col-span-2 dashboard-card flex flex-col min-h-[300px]">
+                <h3 className="text-xl font-black text-white italic uppercase mb-6">Fluxo de Disparos</h3>
+                {stats.recentLogs && stats.recentLogs.length > 0 ? (
+                  <div className="flex-1 space-y-2 overflow-y-auto max-h-64">
+                    {stats.recentLogs.slice(0, 8).map((log: any, i: number) => (
+                      <div key={i} className="flex items-center justify-between px-4 py-3 rounded-xl bg-white/3 border border-white/5">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                            log.status === 'completed' ? 'bg-emerald-400' :
+                            log.status === 'running' ? 'bg-yellow-400 animate-pulse' :
+                            log.status === 'cancelled' ? 'bg-rose-400' : 'bg-slate-500'
+                          }`} />
+                          <span className="text-xs text-white font-black truncate">{log.name}</span>
+                        </div>
+                        <div className="flex items-center gap-4 flex-shrink-0 ml-3">
+                          <span className="text-[10px] text-emerald-400 font-black">{log.sent || 0} enviadas</span>
+                          {(log.failed || 0) > 0 && <span className="text-[10px] text-rose-400 font-black">{log.failed} falhas</span>}
+                          <span className={`text-[9px] font-black px-2 py-0.5 rounded-full ${
+                            log.status === 'completed' ? 'bg-emerald-500/10 text-emerald-400' :
+                            log.status === 'running' ? 'bg-yellow-500/10 text-yellow-400' :
+                            log.status === 'cancelled' ? 'bg-rose-500/10 text-rose-400' : 'bg-slate-500/10 text-slate-400'
+                          }`}>
+                            {log.status === 'completed' ? 'Concluída' : log.status === 'running' ? 'Ativa' : log.status === 'cancelled' ? 'Cancelada' : log.status}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex-1 flex flex-col items-center justify-center gap-4 opacity-20">
+                    <BarChart3 size={64} className="text-slate-600" strokeWidth={1} />
+                    <span className="text-[10px] font-black uppercase tracking-[0.4em]">Nenhum disparo ainda</span>
+                  </div>
+                )}
               </div>
+
+              {/* Atividade Recente */}
               <div className="dashboard-card min-h-[300px] flex flex-col">
-                <h3 className="text-xl font-black text-white italic uppercase mb-8">Atividade Recente</h3>
-                <div className="flex-1 flex flex-col items-center justify-center gap-4 opacity-20">
-                  <Clock size={48} className="text-slate-600" strokeWidth={1} />
-                  <span className="text-[10px] font-black uppercase tracking-[0.4em]">Sem logs</span>
-                </div>
+                <h3 className="text-xl font-black text-white italic uppercase mb-6">Atividade Recente</h3>
+                {stats.recentLogs && stats.recentLogs.length > 0 ? (
+                  <div className="flex-1 space-y-3 overflow-y-auto max-h-64">
+                    {stats.recentLogs.slice(0, 5).map((log: any, i: number) => (
+                      <div key={i} className="flex flex-col gap-1 px-3 py-2.5 rounded-xl bg-white/3 border border-white/5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-black text-white truncate">{log.name}</span>
+                          <span className={`text-[9px] font-black ml-2 flex-shrink-0 ${
+                            log.status === 'completed' ? 'text-emerald-400' :
+                            log.status === 'running' ? 'text-yellow-400' : 'text-rose-400'
+                          }`}>
+                            {log.status === 'completed' ? '✅ ativa' : log.status === 'running' ? '⏳ enviando' : '⛔ encerrada'}
+                          </span>
+                        </div>
+                        <div className="text-[9px] text-slate-500">
+                          {log.sent || 0} enviadas · {log.failed || 0} falhas
+                          {log.createdAt && <span className="ml-1">· {new Date(log.createdAt).toLocaleDateString('pt-BR')}</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex-1 flex flex-col items-center justify-center gap-4 opacity-20">
+                    <Clock size={48} className="text-slate-600" strokeWidth={1} />
+                    <span className="text-[10px] font-black uppercase tracking-[0.4em]">Sem logs</span>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -441,29 +554,78 @@ const UserDashboard: React.FC = () => {
         return <InstanceManager />;
 
       case 'disparo':
-        return <EliteDispatcher />;
+        return <div />; {/* EliteDispatcher renderizado fora do switch para manter estado */}
 
       case 'contatos':
         return <GroupToXlsxExporter />;
 
       case 'logs':
+        if (!logsLoaded && !logsLoading) { setTimeout(() => loadLogs(1), 50); }
         return (
           <div className="animate-fade-in space-y-8">
             <header className="dashboard-card flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
               <div>
                 <span className="bg-emerald-500/10 text-emerald-500 text-[9px] font-black uppercase px-3 py-1 rounded-md mb-3 inline-block tracking-widest">Sistema</span>
                 <h1 className="text-2xl md:text-3xl font-black text-white italic uppercase tracking-tighter">Logs de Atividade</h1>
-                <p className="text-slate-500 text-sm mt-1">Nenhum disparo realizado até o momento.</p>
+                <p className="text-slate-500 text-sm mt-1">{logsTotal} disparo(s) registrado(s)</p>
               </div>
-              <button className="bg-white/5 text-white px-8 py-4 rounded-xl font-black text-[10px] uppercase tracking-widest flex items-center gap-3 transition-all border border-white/5 opacity-50 cursor-not-allowed" disabled>
-                <Download size={14} />
-                Exportar CSV
+              <button onClick={() => loadLogs(logsPage)} className="bg-white/5 text-white px-6 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest flex items-center gap-2 transition-all border border-white/5 hover:bg-white/10">
+                <RefreshCw size={14} />
+                Atualizar
               </button>
             </header>
-            <div className="dashboard-card py-20 md:p-24 flex flex-col items-center justify-center gap-6 border-white/5 opacity-20">
-              <Activity size={64} className="text-slate-600" strokeWidth={1} />
-              <span className="text-xs font-black uppercase tracking-[0.4em] text-slate-600 italic">Lista de logs vazia</span>
-            </div>
+
+            {logsLoading ? (
+              <div className="dashboard-card py-20 flex flex-col items-center justify-center gap-4">
+                <div className="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
+                <span className="text-xs text-slate-500 uppercase tracking-widest">Carregando logs...</span>
+              </div>
+            ) : logs.length === 0 ? (
+              <div className="dashboard-card py-20 flex flex-col items-center justify-center gap-6 border-white/5 opacity-20">
+                <Activity size={64} className="text-slate-600" strokeWidth={1} />
+                <span className="text-xs font-black uppercase tracking-[0.4em] text-slate-600 italic">Nenhum disparo realizado</span>
+              </div>
+            ) : (
+              <div className="dashboard-card space-y-3">
+                {logs.map((log) => (
+                  <div key={log.id} className="flex items-center justify-between p-4 bg-white/3 rounded-xl border border-white/5 hover:border-white/10 transition-all">
+                    <div className="flex items-center gap-4 flex-1 min-w-0">
+                      <div className={`w-2 h-2 rounded-full flex-shrink-0 ${log.status === 'completed' ? 'bg-emerald-500' : log.status === 'running' ? 'bg-yellow-500 animate-pulse' : log.status === 'failed' ? 'bg-rose-500' : 'bg-slate-500'}`} />
+                      <div className="min-w-0">
+                        <p className="text-sm font-black text-white truncate">{log.name}</p>
+                        <p className="text-[10px] text-slate-500 truncate">{log.instanceName} · {log.message}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4 flex-shrink-0 ml-4">
+                      <div className="text-center min-w-[48px]">
+                        <div className="text-sm font-black text-emerald-400">{log.sent || 0}</div>
+                        <div className="text-[9px] text-slate-600 uppercase">Enviados</div>
+                      </div>
+                      <div className="text-center min-w-[48px]">
+                        <div className="text-sm font-black text-rose-400">{log.failed || 0}</div>
+                        <div className="text-[9px] text-slate-600 uppercase">Falhas</div>
+                      </div>
+                      <div className="text-center min-w-[48px]">
+                        <div className="text-sm font-black text-brand-400">{log.successRate || '0%'}</div>
+                        <div className="text-[9px] text-slate-600 uppercase">Taxa</div>
+                      </div>
+                      <div className="text-[9px] text-slate-600 text-right hidden md:block min-w-[80px]">
+                        <div className="font-black text-slate-400">{log.status === 'completed' ? '✅ Concluído' : log.status === 'running' ? '⏳ Enviando' : log.status === 'cancelled' ? '⛔ Cancelado' : '❌ Falhou'}</div>
+                        <div>{log.createdAt ? new Date(log.createdAt).toLocaleString('pt-BR') : ''}</div>
+                        {log.duration && <div className="text-slate-700">{log.duration}</div>}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {logsTotal > 50 && (
+                  <div className="flex justify-center gap-3 pt-4">
+                    <button onClick={() => loadLogs(logsPage - 1)} disabled={logsPage <= 1} className="px-4 py-2 text-xs font-black uppercase rounded-lg bg-white/5 border border-white/10 disabled:opacity-30">Anterior</button>
+                    <span className="px-4 py-2 text-xs text-slate-500">{logsPage}</span>
+                    <button onClick={() => loadLogs(logsPage + 1)} disabled={logsPage * 50 >= logsTotal} className="px-4 py-2 text-xs font-black uppercase rounded-lg bg-white/5 border border-white/10 disabled:opacity-30">Próximo</button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         );
 
@@ -471,7 +633,7 @@ const UserDashboard: React.FC = () => {
         return <GroupManager />;
 
       case 'aquecimento':
-        return <WarmupCloud />;
+        return <div />; {/* WarmupCloud renderizado fora do switch para manter estado */}
 
       case 'conquistas':
         return <GoalsTracker />;
@@ -497,16 +659,26 @@ const UserDashboard: React.FC = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
-                <div className="bg-white/5 p-6 rounded-2xl border border-white/5">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+                <div className="bg-white/5 p-5 rounded-2xl border border-white/5">
                   <div className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">Mensagens Enviadas</div>
-                  <div className="text-2xl font-black text-white italic">0</div>
-                  <div className="text-[9px] text-slate-600 mt-1">de 0 do plano</div>
+                  <div className="text-2xl font-black text-emerald-400 italic">{stats.totalMessagesSent?.toLocaleString() || '0'}</div>
+                  <div className="text-[9px] text-slate-600 mt-1">{stats.runningCampaigns || 0} campanha(s) ativa(s)</div>
                 </div>
-                <div className="bg-white/5 p-6 rounded-2xl border border-white/5">
+                <div className="bg-white/5 p-5 rounded-2xl border border-white/5">
+                  <div className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">Taxa de Entrega</div>
+                  <div className="text-2xl font-black text-brand-400 italic">{stats.successRate || '0%'}</div>
+                  <div className="text-[9px] text-slate-600 mt-1">{stats.totalCampaigns || 0} campanha(s)</div>
+                </div>
+                <div className="bg-white/5 p-5 rounded-2xl border border-white/5">
+                  <div className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">Falhas Detectadas</div>
+                  <div className="text-2xl font-black text-rose-400 italic">{stats.totalMessagesFailed?.toLocaleString() || '0'}</div>
+                  <div className="text-[9px] text-slate-600 mt-1">erros técnicos</div>
+                </div>
+                <div className="bg-white/5 p-5 rounded-2xl border border-white/5">
                   <div className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">Sessões WhatsApp</div>
-                  <div className="text-2xl font-black text-white italic">0</div>
-                  <div className="text-[9px] text-slate-600 mt-1">0 conectada(s)</div>
+                  <div className="text-2xl font-black text-white italic">{stats.connectedInstances || 0}/{stats.totalInstances || 0}</div>
+                  <div className="text-[9px] text-slate-600 mt-1">conectada(s)</div>
                 </div>
               </div>
             </div>
@@ -615,7 +787,15 @@ const UserDashboard: React.FC = () => {
 
       <main className="flex-1 p-4 pt-20 md:p-8 lg:p-16 overflow-y-auto bg-[#0d1117] lg:pt-16">
         <div className="max-w-7xl mx-auto">
-          {renderContent()}
+          {/* EliteDispatcher permanece montado para não perder estado de campanha em andamento */}
+          <div style={{ display: activeTab === 'disparo' ? 'block' : 'none' }}>
+            <EliteDispatcher />
+          </div>
+          {/* WarmupCloud permanece montado para não perder estado de aquecimento em andamento */}
+          <div style={{ display: activeTab === 'aquecimento' ? 'block' : 'none' }}>
+            <WarmupCloud />
+          </div>
+          {activeTab !== 'disparo' && activeTab !== 'aquecimento' && renderContent()}
         </div>
       </main>
     </div>
