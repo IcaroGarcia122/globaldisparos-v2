@@ -424,7 +424,7 @@ router.post('/start', async (req: AuthRequest, res: Response) => {
     instanceId: instId,
     userId,
     phone: instance.phoneNumber,
-    instanceName: `instance_${instId}`,
+    instanceName: instance.name || `instance_${instId}`,
     day: resumeDay,
     sessionSent: 0,
     sessionsToday: resumeSessionsToday,
@@ -444,7 +444,7 @@ router.post('/start', async (req: AuthRequest, res: Response) => {
   // Primeira sessão após delay inicial
   state.timer = setTimeout(() => sendNextBatch(key), firstDelay);
 
-  logger.info(`[Warmup] Iniciado para instance_${instId} → ${instance.phoneNumber} (dia ${startDay})`);
+  logger.info(`[Warmup] Iniciado para ${instance.name || 'instance_'+instId} → ${instance.phoneNumber} (dia ${startDay})`);
 
   return res.json({
     message: 'Warmup iniciado',
@@ -532,6 +532,38 @@ router.get('/status', async (req: AuthRequest, res: Response) => {
     all[k] = { running: v.running, day: v.day, phaseId: v.currentPhaseId, totalSent: v.totalSent };
   });
   return res.json(all);
+});
+
+/** POST /api/warmup/reset-started-at — corrige a data de início do aquecimento */
+router.post('/reset-started-at', async (req: AuthRequest, res: Response) => {
+  const { instanceId, startedAt } = req.body;
+  if (!instanceId) return res.status(400).json({ error: 'instanceId obrigatório' });
+
+  const instId = parseInt(String(instanceId));
+  const newStartedAt = startedAt ? parseInt(String(startedAt)) : Date.now();
+
+  await prisma.$executeRaw`
+    UPDATE warmup_states SET started_at = ${BigInt(newStartedAt)}, updated_at = NOW()
+    WHERE instance_id = ${instId}
+  `.catch(() => {});
+
+  // Atualizar na memória também se estiver rodando
+  const key = String(instId);
+  const state = activeWarmups.get(key);
+  if (state) {
+    state.startedAt = newStartedAt;
+    const msPerDay = 24 * 60 * 60 * 1000;
+    const daysSince = Math.floor((Date.now() - newStartedAt) / msPerDay);
+    state.day = Math.max(1, daysSince + 1);
+    state.lastDayAt = newStartedAt + daysSince * msPerDay;
+  }
+
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const daysSince = Math.floor((Date.now() - newStartedAt) / msPerDay);
+  const newDay = Math.max(1, daysSince + 1);
+
+  logger.info(`[Warmup] startedAt corrigido para instance ${instId}: dia ${newDay}`);
+  return res.json({ ok: true, newDay, newStartedAt, message: `Aquecimento agora está no dia ${newDay}` });
 });
 
 export default router;

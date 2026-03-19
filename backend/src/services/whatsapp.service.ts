@@ -139,8 +139,19 @@ class WhatsAppService {
    * Depois tenta enriquecer nomes via /chat/findMessages de cada grupo.
    */
   async fetchGroups(instanceName: string): Promise<any[]> {
+    // Verificar se sessão está ativa antes de tentar buscar grupos
+    try {
+      const state = await this.getInstanceState(instanceName);
+      if (state !== 'open') {
+        logger.warn(`[Evolution] ${instanceName} não está conectado (state=${state}) — não buscando grupos`);
+        return [];
+      }
+    } catch {
+      logger.warn(`[Evolution] ${instanceName} offline — não buscando grupos`);
+      return [];
+    }
+
     // Evolution v2: fetchAllGroups usa banco PostgreSQL — resposta instantânea
-    // Evolution v1: trava com 200+ grupos — usa findChats como fallback
     try {
       logger.info(`[Evolution] fetchAllGroups (v2 via DB): ${instanceName}`);
       // v2.3.6: GET com timeout generoso (pode demorar 30-60s)
@@ -280,25 +291,55 @@ class WhatsAppService {
    * Busca participantes — compatível com v1 e v2
    */
   async getGroupParticipants(instanceName: string, groupJid: string): Promise<any[]> {
-    // Evolution v2.3.6: o único endpoint confiável é fetchAllGroups?getParticipants=true
-    // /group/participants e /group/findGroupInfos retornam 404 nesta versão
+    // Tentar endpoint direto por grupo primeiro (mais rápido)
+    try {
+      const res = await this.client.get(
+        `/group/findParticipants/${instanceName}?groupJid=${groupJid}`,
+        { timeout: 10000 }
+      );
+      const data = res.data;
+      const participants = data?.participants || data?.members || (Array.isArray(data) ? data : []);
+      if (participants.length > 0) {
+        logger.info(`[Evolution] ${participants.length} participantes via findParticipants`);
+        return participants;
+      }
+    } catch { /* endpoint não existe nesta versão */ }
+
+    // Fallback: fetchAllGroups com timeout maior (busca todos de uma vez)
     try {
       logger.info(`[Evolution] Buscando participantes via fetchAllGroups para ${groupJid}`);
       const res = await this.client.get(
         `/group/fetchAllGroups/${instanceName}?getParticipants=true`,
-        { timeout: 60000 }
+        { timeout: 180000 } // 3 minutos — busca todos os grupos de uma vez
       );
       const raw = Array.isArray(res.data) ? res.data : (res.data?.groups || []);
       const group = raw.find((g: any) => (g.id || g.jid) === groupJid);
-      if (group?.participants && Array.isArray(group.participants) && group.participants.length > 0) {
+      if (group?.participants?.length > 0) {
         logger.info(`[Evolution] ${group.participants.length} participantes via fetchAllGroups`);
         return group.participants;
       }
-      logger.warn(`[Evolution] fetchAllGroups: grupo ${groupJid} não encontrado ou sem participantes (total grupos: ${raw.length})`);
     } catch (err: any) {
       logger.warn(`[Evolution] fetchAllGroups falhou: ${err?.response?.status || err.message}`);
     }
     return [];
+  }
+
+  /** Busca TODOS os grupos com participantes de uma vez e salva no banco */
+  async syncAllGroupParticipants(instanceName: string): Promise<{ synced: number; failed: number }> {
+    try {
+      logger.info(`[Evolution] Sincronizando participantes de todos os grupos para ${instanceName}...`);
+      const res = await this.client.get(
+        `/group/fetchAllGroups/${instanceName}?getParticipants=true`,
+        { timeout: 180000 }
+      );
+      const raw = Array.isArray(res.data) ? res.data : (res.data?.groups || []);
+      const withParticipants = raw.filter((g: any) => g.participants?.length > 0);
+      logger.info(`[Evolution] ${withParticipants.length}/${raw.length} grupos com participantes`);
+      return { synced: withParticipants.length, failed: raw.length - withParticipants.length };
+    } catch (err: any) {
+      logger.warn(`[Evolution] syncAllGroupParticipants falhou: ${err.message}`);
+      return { synced: 0, failed: 0 };
+    }
   }
 
 
@@ -448,4 +489,12 @@ class WhatsAppService {
   }
 }
 
-export default new WhatsAppService();
+// Instância singleton
+const whatsappServiceInstance = new WhatsAppService();
+
+// Expor o cliente para uso interno nas rotas
+(whatsappServiceInstance as any).getEvolutionClient = function() {
+  return (this as any).client;
+};
+
+export default whatsappServiceInstance;

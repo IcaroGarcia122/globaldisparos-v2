@@ -71,9 +71,12 @@ const EliteDispatcher: React.FC = () => {
     // Carregar instâncias
     fetchAPI('/instances').then(data => {
       const list = data?.data || data || [];
-      const connected = list.filter((i: Instance) => i.status === 'connected');
-      setInstances(connected);
-      if (connected.length === 1) setConfig(c => ({ ...c, instanceId: String(connected[0].id) }));
+      // Mostrar todas as instâncias — não filtrar por status aqui
+      // O backend já filtra isActive:true e exclui deleted_
+      setInstances(list);
+      const conn = list.filter((i: Instance) => i.status === 'connected');
+      if (conn.length === 1) setConfig(c => ({ ...c, instanceId: String(conn[0].id) }));
+      else if (list.length === 1) setConfig(c => ({ ...c, instanceId: String(list[0].id) }));
     }).catch(() => {});
 
     // Recuperar campanha ativa caso tenha feito logout/login com campanha em andamento
@@ -515,7 +518,7 @@ const EliteDispatcher: React.FC = () => {
             </option>
           ))}
         </select>
-        {instances.length === 0 && <p className="text-xs text-yellow-500">Nenhuma instância conectada</p>}
+        {instances.length === 0 && <p className="text-xs text-yellow-500">Nenhuma instância criada. Vá em WhatsApp → Nova Instância.</p>}
       </div>
 
       {/* Fonte */}

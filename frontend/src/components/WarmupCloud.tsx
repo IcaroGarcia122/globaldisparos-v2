@@ -62,17 +62,16 @@ const WarmupCloud: React.FC = () => {
       try {
         const res  = await fetchAPI('/instances');
         const list = (res?.data || res?.instances || res || []) as Instance[];
-        const conn = list.filter((i: Instance) => i.status === 'connected');
-        setInstances(conn);
-        // Restaurar instância selecionada — se ainda existe e está conectada
+        // Mostrar todas as instâncias ativas (conectadas OU não)
+        // O status é apenas informativo — não bloqueia a seleção
+        setInstances(list);
         const saved = localStorage.getItem('warmup_selected_instance');
-        const savedConn = saved && conn.find((i: Instance) => i.id === saved);
-        if (savedConn) {
+        const savedInst = saved && list.find((i: Instance) => i.id === saved);
+        if (savedInst) {
           setSelectedId(saved!);
-          // Não limpar status — poll já pode ter buscado os dados
-        } else if (conn.length === 1) {
-          setSelectedId(conn[0].id);
-          localStorage.setItem('warmup_selected_instance', conn[0].id);
+        } else if (list.length === 1) {
+          setSelectedId(list[0].id);
+          localStorage.setItem('warmup_selected_instance', list[0].id);
         }
       } catch { /* silent */ } finally { setLoading(false); }
     })();
@@ -153,6 +152,25 @@ const WarmupCloud: React.FC = () => {
     } catch { /* silent */ } finally { setActionLoading(false); }
   };
 
+  const handleResetDay = async () => {
+    if (!selectedId) return;
+    const dias = window.prompt('Há quantos dias você realmente começou o aquecimento? (ex: 2 para dizer que foi há 2 dias)');
+    if (!dias || isNaN(Number(dias))) return;
+    const daysAgo = Math.max(0, parseInt(dias) - 1);
+    const newStartedAt = Date.now() - daysAgo * 24 * 60 * 60 * 1000;
+    setActionLoading(true);
+    try {
+      const res = await fetchAPI('/warmup/reset-started-at', {
+        method: 'POST',
+        body: { instanceId: selectedId, startedAt: newStartedAt },
+      });
+      await pollStatus(selectedId);
+      localStorage.setItem(startedAtKey(selectedId), String(newStartedAt));
+      alert(`✅ Corrigido! Aquecimento agora está no ${res.newDay}º dia.`);
+    } catch (e: any) { alert('Erro: ' + e.message); }
+    finally { setActionLoading(false); }
+  };
+
   // Valores derivados — ordem importa
   const inst            = instances.find(i => i.id === selectedId);
   // Dia: SEMPRE vem do servidor. Quando parado, usar último dia salvo no localStorage
@@ -160,7 +178,15 @@ const WarmupCloud: React.FC = () => {
   const day             = status?.running ? status.day : (status?.day ?? savedDay);
   const currentPhaseId = day <= 3 ? 1 : day <= 7 ? 2 : day <= 14 ? 3 : day <= 21 ? 4 : 5;
   const phase       = getPhaseUI(status?.running ? (status.phaseId ?? currentPhaseId) : currentPhaseId);
-  const heatLevel   = Math.min(Math.round(((day - 1) / 21) * 100), 100);
+  // Temperatura real: combina dias passados com mensagens enviadas
+  // 100% = Fase 5 (dia 22+) com 500+ msgs enviadas
+  // Progresso por dias: contribui 60% do calor
+  // Progresso por mensagens: contribui 40% do calor
+  const dayProgress  = Math.min((day - 1) / 21, 1); // 0 a 1 baseado em 21 dias
+  const totalSentNow = status?.totalSent ?? 0;
+  const msgsTarget   = 500; // ~500 msgs = chip bem aquecido
+  const msgsProgress = Math.min(totalSentNow / msgsTarget, 1);
+  const heatLevel    = Math.min(Math.round((dayProgress * 0.6 + msgsProgress * 0.4) * 100), 100);
   const isRunning   = status?.running ?? false;
 
   const fmt = (s: number) => s <= 0 ? '—' : s < 60 ? `${s}s` : `${Math.floor(s/60)}m ${s%60}s`;
@@ -296,14 +322,14 @@ const WarmupCloud: React.FC = () => {
             {loading ? (
               <div className="flex items-center gap-2 text-slate-500 text-xs"><div className="w-4 h-4 border-2 border-slate-600 border-t-slate-400 rounded-full animate-spin"/> Carregando...</div>
             ) : instances.length === 0 ? (
-              <div className="text-xs text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-xl p-4">⚠️ Nenhuma instância conectada.</div>
+              <div className="text-xs text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-xl p-4">⚠️ Nenhuma instância criada. Crie uma na aba WhatsApp.</div>
             ) : (
               <div className="space-y-3">
                 <div className="relative">
                   <select value={selectedId} onChange={e => { setSelectedId(e.target.value); localStorage.setItem('warmup_selected_instance', e.target.value); }} disabled={isRunning}
                     className="w-full bg-[#0d1117] border border-white/10 rounded-xl px-4 py-3 text-white text-xs font-bold appearance-none outline-none focus:border-brand-500 transition-all disabled:opacity-50">
                     <option value="">Selecionar...</option>
-                    {instances.map(i => <option key={i.id} value={i.id}>{i.name} · {i.phoneNumber || '?'}</option>)}
+                    {instances.map(i => <option key={i.id} value={i.id}>{i.name} · {i.phoneNumber || '?'} {i.status !== 'connected' ? '(desconectado)' : ''}</option>)}
                   </select>
                   <ChevronDown size={12} className="text-slate-500 absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none"/>
                 </div>
@@ -314,16 +340,11 @@ const WarmupCloud: React.FC = () => {
                     <div className="text-[9px] text-slate-500 mt-1">(próprio número)</div>
                   </div>
                 )}
-                {!isRunning && selectedId && savedDay > 1 && (
+                {!isRunning && selectedId && (
                   <button
-                    onClick={() => {
-                      if (confirm('Reiniciar protocolo do Dia 1? O progresso será perdido.')) {
-                        // localStorage apenas para compatibilidade
-                        setStatus(null);
-                      }
-                    }}
-                    className="w-full py-2 rounded-xl bg-white/5 border border-white/10 text-slate-500 hover:text-rose-400 hover:border-rose-500/30 font-black text-[9px] uppercase tracking-widest transition-all">
-                    🔄 Reiniciar do Dia 1
+                    onClick={handleResetDay}
+                    className="w-full py-2 rounded-xl bg-white/5 border border-white/10 text-slate-500 hover:text-amber-400 hover:border-amber-500/30 font-black text-[9px] uppercase tracking-widest transition-all">
+                    ✏️ Corrigir Dia Atual
                   </button>
                 )}
               </div>

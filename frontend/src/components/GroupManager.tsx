@@ -82,7 +82,7 @@ const GroupManager: React.FC = () => {
       try {
         const res  = await fetchAPI('/instances');
         const list = (res?.data || res?.instances || res || []) as Instance[];
-        setInstances(Array.isArray(list) ? list.filter(i => i.status === 'connected') : []);
+        setInstances(Array.isArray(list) ? list : []);
       } catch { setError('Erro ao carregar instâncias'); }
       finally { setLoadingInst(false); }
     })();

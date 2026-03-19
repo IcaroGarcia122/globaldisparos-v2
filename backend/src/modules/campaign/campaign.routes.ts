@@ -9,6 +9,39 @@ import { emitToUser, emitToCampaign } from '../../sockets/socket.server';
 import { randomDelay } from '../../utils/delay';
 import logger from '../../utils/logger';
 
+/** Retorna o nome real da instância na Evolution (ex: "vvenda", não "instance_1") */
+async function getEvolutionName(instanceId: number | string): Promise<string> {
+  const id = parseInt(String(instanceId));
+  if (isNaN(id)) return String(instanceId);
+  const inst = await prisma.whatsAppInstance.findUnique({
+    where: { id }, select: { name: true, phoneNumber: true }
+  }).catch(() => null);
+  if (!inst) return `instance_${id}`;
+
+  const name = inst.name || `instance_${id}`;
+
+  // Se o nome segue o padrão antigo "instance_N", verificar se a Evolution
+  // conhece esse nome — se não, tentar buscar pelo phoneNumber
+  if (/^instance_\d+$/.test(name) && inst.phoneNumber) {
+    try {
+      const { default: ws } = await import('../../services/whatsapp.service');
+      const all = await ws.fetchInstances().catch(() => []);
+      const match = all.find((i: any) => {
+        const owner = (i.ownerJid || i.owner || '').replace('@s.whatsapp.net','').replace('@c.us','');
+        return owner === inst.phoneNumber?.replace(/\D/g,'');
+      });
+      if (match?.instanceName && match.instanceName !== name) {
+        // Atualizar nome no banco para futuras chamadas
+        await prisma.whatsAppInstance.update({ where: { id }, data: { name: match.instanceName } }).catch(() => {});
+        logger.info(`[Campaign] Corrigindo nome da instância ${id}: "${name}" → "${match.instanceName}"`);
+        return match.instanceName;
+      }
+    } catch { /* silencioso */ }
+  }
+
+  return name;
+}
+
 const router = Router();
 router.use(authenticate);
 
@@ -249,7 +282,7 @@ router.post('/iniciar', async (req: AuthRequest, res: Response) => {
 
     runCampaign(
       campaign.id,
-      `instance_${instanceId}`,
+      await getEvolutionName(instanceId),
       contacts,
       message,
       { intervalMs: interval, randomizeInterval, randomizeMessage: doRandomize, excludeAdmins, adminNumbers: Array.from(allAdmins) },
@@ -275,7 +308,8 @@ router.post('/send-single', async (req: AuthRequest, res: Response) => {
     let sendSuccess = false;
     let sendError = '';
     try {
-      await whatsappService.sendText(`instance_${instanceId}`, number, message);
+      const evName278 = await getEvolutionName(instanceId);
+      await whatsappService.sendText(evName278, number, message);
       sendSuccess = true;
     } catch (sendErr: any) {
       sendError = sendErr.message || 'Erro ao enviar';
@@ -344,7 +378,8 @@ router.post('/enviar-xlsx', upload.single('file'), async (req: AuthRequest, res:
     });
 
     res.status(201).json({ campaignId: campaign.id, totalContacts: contacts.length });
-    runCampaign(campaign.id, `instance_${instanceId}`, contacts, message,
+    const evNameRun = await getEvolutionName(instanceId);
+    runCampaign(campaign.id, evNameRun, contacts, message,
       { intervalMs: parseInt(interval), randomizeInterval: Boolean(randomizeInterval), randomizeMessage: Boolean(doRandomize), excludeAdmins: false },
       userId
     );

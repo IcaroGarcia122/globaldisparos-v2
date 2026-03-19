@@ -13,7 +13,9 @@ const instanceName = (id: number) => `instance_${id}`;
 /** GET /api/instances */
 router.get('/', async (req: AuthRequest, res: Response) => {
   try {
-    const where = req.user!.role === 'admin' ? {} : { userId: req.user!.id, isActive: true };
+    const where = req.user!.role === 'admin'
+      ? { name: { not: { startsWith: 'deleted_' } } }
+      : { userId: req.user!.id, isActive: true, name: { not: { startsWith: 'deleted_' } } };
     const instances = await prisma.whatsAppInstance.findMany({
       where,
       orderBy: { createdAt: 'desc' },
@@ -228,11 +230,24 @@ router.delete('/:id', async (req: AuthRequest, res: Response) => {
     try { await whatsappService.logoutInstance(evName); } catch { /* ignora */ }
     try { await whatsappService.deleteInstance(evName); } catch { /* ignora */ }
 
-    // Remove do banco completamente
-    await prisma.whatsAppGroup.deleteMany({ where: { instanceId: id } });
-    await prisma.whatsAppInstance.delete({ where: { id } });
+    // Cancelar campanhas ativas desta instância
+    await prisma.campaign.updateMany({
+      where: { instanceId: id, status: { in: ['running', 'paused', 'pending'] } },
+      data: { status: 'cancelled', completedAt: new Date() },
+    });
 
-    logger.info(`[Instance] Deletada: ${id} (${evName})`);
+    // Remover grupos e warmup state
+    await prisma.whatsAppGroup.deleteMany({ where: { instanceId: id } });
+    await prisma.$executeRaw`DELETE FROM warmup_states WHERE instance_id = ${id}`.catch(() => {});
+
+    // Desvincular campanhas antigas (set instanceId para null não é possível sem schema change)
+    // Usar soft-delete na instância em vez de hard-delete
+    await prisma.whatsAppInstance.update({
+      where: { id },
+      data: { isActive: false, status: 'disconnected', qrCode: null, name: `deleted_${id}_${Date.now()}` },
+    });
+
+    logger.info(`[Instance] Removida (soft-delete): ${id} (${evName})`);
     return res.json({ message: 'Instância removida com sucesso' });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });

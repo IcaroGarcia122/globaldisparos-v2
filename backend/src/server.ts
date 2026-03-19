@@ -37,8 +37,23 @@ setupSocketServer(server);
 
 // ─── MIDDLEWARES ──────────────────────────────────────────────────────────────
 app.use(helmet({ contentSecurityPolicy: false }));
+const allowedOrigins = [
+  process.env.FRONTEND_URL || 'http://localhost:5173',
+  'http://localhost:5173',
+  'http://localhost:3000',
+];
+// Aceita também www. prefixado
+if (process.env.FRONTEND_URL) {
+  const u = process.env.FRONTEND_URL;
+  if (!u.includes('www.')) allowedOrigins.push(u.replace('https://', 'https://www.'));
+}
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: (origin, cb) => {
+    // Permite requests sem origin (mobile, Postman, webhooks)
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+    cb(null, true); // Em produção, pode restringir aqui se necessário
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 }));
@@ -109,6 +124,19 @@ async function start() {
 
       logger.info(`[Startup] ${all.length} instâncias encontradas na Evolution`);
 
+      // Limpa instâncias fantasma (existem no banco mas não na Evolution)
+      const evNames = new Set(all.map((i: any) => i.instanceName).filter(Boolean));
+      const dbInstances0 = await prisma.whatsAppInstance.findMany({ select: { id: true, name: true } });
+      for (const db of dbInstances0) {
+        if (db.name && !evNames.has(db.name)) {
+          await prisma.whatsAppInstance.update({
+            where: { id: db.id },
+            data: { status: 'disconnected', qrCode: null }
+          });
+          logger.warn(`[Startup] Instância fantasma marcada como desconectada: ${db.name}`);
+        }
+      }
+
       const evolutionMap = new Map<string, any>();
       for (const inst of all) {
         if (inst.instanceName) evolutionMap.set(inst.instanceName, inst);
@@ -118,8 +146,25 @@ async function start() {
       const dbInstances = await prisma.whatsAppInstance.findMany({ where: { isActive: true } });
 
       for (const dbInst of dbInstances) {
-        const evName = `instance_${dbInst.id}`;
-        const evInst = evolutionMap.get(evName);
+        // Usar nome real da instância (ex: "vvenda"), não "instance_1"
+        let evName = dbInst.name || `instance_${dbInst.id}`;
+        let evInst = evolutionMap.get(evName);
+
+        // Se não encontrou e o nome é padrão "instance_N", tentar achar pelo phoneNumber
+        if (!evInst && dbInst.phoneNumber && /^instance_\d+$/.test(evName)) {
+          const phoneClean = dbInst.phoneNumber.replace(/\D/g, '');
+          for (const [evN, evI] of evolutionMap) {
+            const owner = (evI.ownerJid || evI.owner || '').replace('@s.whatsapp.net','').replace('@c.us','');
+            if (owner === phoneClean) {
+              evName = evN;
+              evInst = evI;
+              // Atualizar nome no banco
+              await prisma.whatsAppInstance.update({ where: { id: dbInst.id }, data: { name: evN } });
+              logger.info(`[Startup] Auto-corrigido nome da instância ${dbInst.id}: "${dbInst.name}" → "${evN}"`);
+              break;
+            }
+          }
+        }
 
         if (!evInst) {
           // Instância no banco mas não na Evolution — marca desconectada
@@ -130,9 +175,9 @@ async function start() {
           continue;
         }
 
-        // Registra webhook
+        // Registra webhook usando nome real
         await wha.registerWebhook(evName).catch(() => {});
-        logger.info(`[Startup] Webhook registrado: ${evName}`);
+        logger.info(`[Startup] Webhook registrado: ${evName} (id=${dbInst.id})`);
 
         const isOpen = evInst.status === 'open';
         if (isOpen) {

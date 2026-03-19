@@ -175,7 +175,8 @@ router.post('/:groupId/dispatch', authenticate, async (req: AuthRequest, res: Re
 router.get('/debug/:instanceId/:groupId', authenticate, async (req: AuthRequest, res: Response) => {
   const instanceId = parseInt(req.params.instanceId);
   const groupId = decodeURIComponent(req.params.groupId);
-  const instanceName = `instance_${instanceId}`;
+  const instRow = await prisma.whatsAppInstance.findUnique({ where: { id: instanceId }, select: { name: true } }).catch(() => null);
+  const instanceName = instRow?.name || `instance_${instanceId}`;
 
   const results: any = { groupId, endpoints: [] };
 
@@ -281,6 +282,66 @@ router.get('/test-add/:instanceId/:groupId', authenticate, async (req: AuthReque
   return res.json({ instanceName, groupId, results });
 });
 
+/** POST /api/groups/sync-participants/:instanceId — sincroniza participantes de todos os grupos */
+router.post('/sync-participants/:instanceId', authenticate, async (req: AuthRequest, res: Response) => {
+  const instanceId = parseInt(req.params.instanceId);
+  try {
+    const instance = await prisma.whatsAppInstance.findUnique({
+      where: { id: instanceId }, select: { name: true }
+    });
+    const instanceName = instance?.name || `instance_${instanceId}`;
+
+    logger.info(`[Groups] Iniciando sync de participantes para ${instanceName}...`);
+
+    // Responde imediatamente — processo é demorado
+    res.json({ message: 'Sincronização iniciada em background. Pode levar 1-3 minutos.', instanceName });
+
+    // Executar em background
+    setImmediate(async () => {
+      try {
+        const evRes = await whatsappService.getEvolutionClient().get(
+          `/group/fetchAllGroups/${instanceName}?getParticipants=true`,
+          { timeout: 180000 }
+        );
+        const raw = Array.isArray(evRes.data) ? evRes.data : (evRes.data?.groups || []);
+        let synced = 0;
+
+        for (const g of raw) {
+          const gid: string = g.id || g.jid || '';
+          if (!gid.includes('@g.us') || !g.participants?.length) continue;
+
+          const participants: string[] = [];
+          const admins: string[] = [];
+          for (const p of g.participants) {
+            const jid: string = p.id || p.jid || '';
+            const phone = jid.replace('@s.whatsapp.net','').replace('@c.us','');
+            if (phone.length < 8) continue;
+            participants.push(phone);
+            if (p.admin === 'admin' || p.admin === 'superadmin') admins.push(phone);
+          }
+
+          if (participants.length > 0) {
+            await prisma.whatsAppGroup.updateMany({
+              where: { instanceId, groupId: gid },
+              data: {
+                participantsList: { participants, admins } as any,
+                participantsCount: participants.length,
+                participantsSyncedAt: new Date(),
+              },
+            }).catch(() => {});
+            synced++;
+          }
+        }
+        logger.info(`[Groups] ✅ Sync participantes concluído: ${synced} grupos atualizados`);
+      } catch (err: any) {
+        logger.warn(`[Groups] Sync participantes falhou: ${err.message}`);
+      }
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 /** GET /api/groups/export-xlsx/:instanceId/:groupId — exporta participantes como XLSX */
 router.get('/export-xlsx/:instanceId/:groupId', authenticate, async (req: AuthRequest, res: Response) => {
   const instanceId = parseInt(req.params.instanceId);
@@ -325,6 +386,73 @@ router.get('/export-xlsx/:instanceId/:groupId', authenticate, async (req: AuthRe
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
+});
+
+/** POST /api/groups/sync-participants/:instanceId
+ *  Busca participantes de TODOS os grupos e salva no banco
+ *  Deve ser chamado uma vez para popular o cache inicial
+ */
+router.post('/sync-participants/:instanceId', authenticate, async (req: AuthRequest, res: Response) => {
+  const instanceId = parseInt(req.params.instanceId);
+  const instance = await prisma.whatsAppInstance.findUnique({
+    where: { id: instanceId }, select: { name: true }
+  });
+  const instanceName = instance?.name || `instance_${instanceId}`;
+
+  // Buscar todos os grupos do banco
+  const groups = await prisma.whatsAppGroup.findMany({
+    where: { instanceId },
+    select: { groupId: true, name: true }
+  });
+
+  if (groups.length === 0) {
+    return res.json({ message: 'Nenhum grupo no banco. Sincronize os grupos primeiro.', synced: 0 });
+  }
+
+  logger.info(`[SyncParticipants] Iniciando para ${instanceName} — ${groups.length} grupos`);
+
+  // Processar em background para não travar o request
+  res.json({ message: `Sincronizando participantes de ${groups.length} grupos em background...`, total: groups.length });
+
+  // Background
+  (async () => {
+    let synced = 0;
+    const baseURL = (process.env.EVOLUTION_API_URL || 'http://127.0.0.1:8081').replace('localhost','127.0.0.1');
+    const apiKey  = process.env.EVOLUTION_API_KEY || '';
+    const headers = { 'Content-Type': 'application/json', 'apikey': apiKey };
+
+    for (const g of groups) {
+      try {
+        const url = `${baseURL}/group/findParticipants/${instanceName}?groupJid=${g.groupId}`;
+        const r   = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
+        if (!r.ok) continue;
+        const data: any = await r.json();
+        const raw: any[] = data?.participants || data?.members || (Array.isArray(data) ? data : []);
+        if (raw.length === 0) continue;
+
+        const participants: string[] = [];
+        const admins: string[] = [];
+        for (const p of raw) {
+          const jid: string = p.id || p.jid || p.phoneNumber || '';
+          const phone = jid.replace('@s.whatsapp.net','').replace('@c.us','').replace(/\D/g,'');
+          if (!phone || phone.length < 8) continue;
+          participants.push(phone);
+          if (p.admin === 'admin' || p.admin === 'superadmin') admins.push(phone);
+        }
+        if (participants.length === 0) continue;
+
+        await prisma.whatsAppGroup.updateMany({
+          where: { instanceId, groupId: g.groupId },
+          data: { participantsCount: participants.length, participantsList: { participants, admins } as any, participantsSyncedAt: new Date() },
+        }).catch(() => {});
+        synced++;
+      } catch { /* grupo falhou, continua */ }
+
+      // Pequeno delay para não sobrecarregar a Evolution
+      await new Promise(r => setTimeout(r, 200));
+    }
+    logger.info(`[SyncParticipants] Concluído: ${synced}/${groups.length} grupos sincronizados para ${instanceName}`);
+  })();
 });
 
 export default router;
