@@ -37,6 +37,9 @@ setupSocketServer(server);
 
 // ─── MIDDLEWARES ──────────────────────────────────────────────────────────────
 app.use(helmet({ contentSecurityPolicy: false }));
+// Cloudflare e Nginx enviam X-Forwarded-For — necessário para rate limiting correto
+app.set('trust proxy', 1);
+
 const allowedOrigins = [
   process.env.FRONTEND_URL || 'http://localhost:5173',
   'http://localhost:5173',
