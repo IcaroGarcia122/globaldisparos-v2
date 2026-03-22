@@ -7,9 +7,15 @@ export const initSocket = (token: string): Socket => {
     return socket;
   }
 
-  const socketUrl = import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:3001';
+  // Em produção usa o mesmo domínio do site (sem porta)
+  // Em desenvolvimento usa localhost:3001
+  const isDev = window.location.hostname === 'localhost';
+  const socketUrl = isDev
+    ? 'http://localhost:3001'
+    : window.location.origin;
 
   socket = io(socketUrl, {
+    path: '/socket.io',
     auth: { token },
     transports: ['websocket', 'polling'],
     reconnection: true,
