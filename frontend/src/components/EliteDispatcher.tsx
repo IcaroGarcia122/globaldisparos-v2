@@ -265,8 +265,8 @@ const EliteDispatcher: React.FC = () => {
 
   const handleReset = () => { setCampaign(null); abortRef.current = false; };
 
-  const filteredGroups = groups.filter(g => g.name.toLowerCase().includes(groupSearch.toLowerCase()));
-  const selectedGroup = groups.find(g => g.id === config.groupId);
+  const filteredGroups = Array.isArray(groups) ? groups.filter(g => g.name?.toLowerCase().includes(groupSearch.toLowerCase())) : [];
+  const selectedGroup = Array.isArray(groups) ? groups.find(g => g.id === config.groupId) : undefined;
   const isCampaignActive = campaign && (campaign.status === 'running' || campaign.status === 'loading_participants');
   const pct = campaign && (campaign.total || 0) > 0 ? Math.round((((campaign.sent||0) + (campaign.failed||0) + (campaign.skipped||0)) / campaign.total) * 100) : 0;
 
@@ -363,18 +363,18 @@ const EliteDispatcher: React.FC = () => {
         </div>
 
         {/* Taxa de sucesso */}
-        {campaign.total > 0 && (campaign.sent + campaign.failed) > 0 && (
+        {(campaign?.total || 0) > 0 && ((campaign?.sent || 0) + (campaign?.failed || 0)) > 0 && (
           <div className="dashboard-card">
             <div className="flex justify-between items-center mb-2">
               <span className="text-xs font-black text-slate-400 uppercase">Taxa de Sucesso</span>
               <span className="text-emerald-400 font-black text-sm">
-                {Math.round((campaign.sent / (campaign.sent + campaign.failed)) * 100)}%
+                {Math.round(((campaign?.sent || 0) / Math.max(1, (campaign?.sent || 0) + (campaign?.failed || 0))) * 100)}%
               </span>
             </div>
             <div className="w-full bg-slate-800 rounded-full h-2">
               <div
                 className="bg-emerald-500 h-2 rounded-full transition-all"
-                style={{ width: `${Math.round((campaign.sent / (campaign.sent + campaign.failed)) * 100)}%` }}
+                style={{ width: `${Math.round(((campaign?.sent || 0) / Math.max(1, (campaign?.sent || 0) + (campaign?.failed || 0))) * 100)}%` }}
               />
             </div>
           </div>
