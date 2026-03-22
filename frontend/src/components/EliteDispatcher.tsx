@@ -66,26 +66,29 @@ const EliteDispatcher: React.FC = () => {
   const campaignIdRef = useRef<number | null>(null);
   const sentNumbersRef = useRef<Set<string>>(new Set());
 
+  // State para forçar re-render quando campaignId muda
+  const [activeCampaignId, setActiveCampaignId] = useState<number | null>(null);
+
   // Polling de progresso da campanha — atualiza a cada 3s enquanto rodando
   useEffect(() => {
-    if (!campaign || campaign.status !== 'running') return;
-    const id = campaignIdRef.current;
-    if (!id) return;
+    if (!activeCampaignId) return;
 
     const interval = setInterval(async () => {
       try {
-        const data = await fetchAPI(`/campaigns/${id}`);
+        const data = await fetchAPI(`/campaigns/${activeCampaignId}`);
         if (!data) return;
+        const newStatus = data.status === 'completed' ? 'done' :
+                          data.status === 'cancelled' ? 'cancelled' :
+                          data.status === 'running' ? 'running' : 'running';
         setCampaign(c => c ? {
           ...c,
           sent: data.messagesSent || 0,
           failed: data.messagesFailed || 0,
           total: data.totalContacts || c.total,
-          status: data.status === 'completed' ? 'done' :
-                  data.status === 'cancelled' ? 'cancelled' :
-                  data.status === 'running' ? 'running' : c.status,
+          status: newStatus,
         } : null);
         if (data.status === 'completed' || data.status === 'cancelled') {
+          setActiveCampaignId(null);
           campaignIdRef.current = null;
           clearInterval(interval);
         }
@@ -93,7 +96,7 @@ const EliteDispatcher: React.FC = () => {
     }, 3000);
 
     return () => clearInterval(interval);
-  }, [campaign?.status]);
+  }, [activeCampaignId]);
 
   // Carrega instâncias conectadas
   useEffect(() => {
@@ -237,6 +240,7 @@ const EliteDispatcher: React.FC = () => {
 
       if (res.campaignId) {
         campaignIdRef.current = res.campaignId;
+        setActiveCampaignId(res.campaignId);
         setCampaign(c => ({ ...c!, status: 'running', total: res.totalContacts || 0, startedAt: Date.now() }));
       } else {
         setError(res.error || 'Erro ao iniciar campanha');
@@ -253,9 +257,9 @@ const EliteDispatcher: React.FC = () => {
     const id = campaignIdRef.current;
     setCampaign(c => c ? { ...c, status: 'cancelled' } : null);
     if (id) {
-      // Parar campanha no backend
       fetchAPI(`/campaigns/${id}/parar`, { method: 'POST' }).catch(() => {});
       campaignIdRef.current = null;
+      setActiveCampaignId(null);
     }
   };
 
