@@ -66,41 +66,33 @@ const EliteDispatcher: React.FC = () => {
   const campaignIdRef = useRef<number | null>(null);
   const sentNumbersRef = useRef<Set<string>>(new Set());
 
-  // Escuta progresso da campanha via socket (backend envia eventos)
+  // Polling de progresso da campanha — atualiza a cada 3s enquanto rodando
   useEffect(() => {
-    if (!campaignIdRef.current) return;
-    const token = localStorage.getItem('token');
-    if (!token) return;
+    if (!campaign || campaign.status !== 'running') return;
+    const id = campaignIdRef.current;
+    if (!id) return;
 
-    import('@/utils/socketClient').then(({ initSocket, getSocket }) => {
-      initSocket(token);
-      const socket = getSocket();
-      if (!socket) return;
-
-      socket.on('campanha:progresso', (data: any) => {
-        if (data.campaignId !== campaignIdRef.current) return;
+    const interval = setInterval(async () => {
+      try {
+        const data = await fetchAPI(`/campaigns/${id}`);
+        if (!data) return;
         setCampaign(c => c ? {
           ...c,
-          sent: data.sent || 0,
-          failed: data.failed || 0,
-          current: data.currentContact || '',
-          currentIndex: (data.sent || 0) + (data.failed || 0),
-          estimatedEnd: data.remainingSeconds ? Date.now() + data.remainingSeconds * 1000 : null,
+          sent: data.messagesSent || 0,
+          failed: data.messagesFailed || 0,
+          total: data.totalContacts || c.total,
+          status: data.status === 'completed' ? 'done' :
+                  data.status === 'cancelled' ? 'cancelled' :
+                  data.status === 'running' ? 'running' : c.status,
         } : null);
-      });
+        if (data.status === 'completed' || data.status === 'cancelled') {
+          campaignIdRef.current = null;
+          clearInterval(interval);
+        }
+      } catch { /* ignora */ }
+    }, 3000);
 
-      socket.on('campanha:concluida', (data: any) => {
-        if (data.campaignId !== campaignIdRef.current) return;
-        setCampaign(c => c ? { ...c, status: 'done', current: '', estimatedEnd: null, sent: data.totalSent || c.sent, failed: data.totalFailed || c.failed } : null);
-        campaignIdRef.current = null;
-      });
-
-      socket.on('campanha:erro', (data: any) => {
-        if (data.campaignId !== campaignIdRef.current) return;
-        setCampaign(c => c ? { ...c, status: 'cancelled', current: '' } : null);
-        campaignIdRef.current = null;
-      });
-    }).catch(() => {});
+    return () => clearInterval(interval);
   }, [campaign?.status]);
 
   // Carrega instâncias conectadas
@@ -258,9 +250,11 @@ const EliteDispatcher: React.FC = () => {
 
   const handlePause = () => {
     abortRef.current = true;
+    const id = campaignIdRef.current;
     setCampaign(c => c ? { ...c, status: 'cancelled' } : null);
-    if (campaignIdRef.current) {
-      fetchAPI(`/disparador/parar/${campaignIdRef.current}`, { method: 'POST' }).catch(() => {});
+    if (id) {
+      // Parar campanha no backend
+      fetchAPI(`/campaigns/${id}/parar`, { method: 'POST' }).catch(() => {});
       campaignIdRef.current = null;
     }
   };
