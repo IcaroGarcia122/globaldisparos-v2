@@ -66,6 +66,43 @@ const EliteDispatcher: React.FC = () => {
   const campaignIdRef = useRef<number | null>(null);
   const sentNumbersRef = useRef<Set<string>>(new Set());
 
+  // Escuta progresso da campanha via socket (backend envia eventos)
+  useEffect(() => {
+    if (!campaignIdRef.current) return;
+    const token = localStorage.getItem('token');
+    if (!token) return;
+
+    import('@/utils/socketClient').then(({ initSocket, getSocket }) => {
+      initSocket(token);
+      const socket = getSocket();
+      if (!socket) return;
+
+      socket.on('campanha:progresso', (data: any) => {
+        if (data.campaignId !== campaignIdRef.current) return;
+        setCampaign(c => c ? {
+          ...c,
+          sent: data.sent || 0,
+          failed: data.failed || 0,
+          current: data.currentContact || '',
+          currentIndex: (data.sent || 0) + (data.failed || 0),
+          estimatedEnd: data.remainingSeconds ? Date.now() + data.remainingSeconds * 1000 : null,
+        } : null);
+      });
+
+      socket.on('campanha:concluida', (data: any) => {
+        if (data.campaignId !== campaignIdRef.current) return;
+        setCampaign(c => c ? { ...c, status: 'done', current: '', estimatedEnd: null, sent: data.totalSent || c.sent, failed: data.totalFailed || c.failed } : null);
+        campaignIdRef.current = null;
+      });
+
+      socket.on('campanha:erro', (data: any) => {
+        if (data.campaignId !== campaignIdRef.current) return;
+        setCampaign(c => c ? { ...c, status: 'cancelled', current: '' } : null);
+        campaignIdRef.current = null;
+      });
+    }).catch(() => {});
+  }, [campaign?.status]);
+
   // Carrega instâncias conectadas
   useEffect(() => {
     // Carregar instâncias
@@ -180,187 +217,50 @@ const EliteDispatcher: React.FC = () => {
   const addVariation = () => setConfig(c => ({ ...c, messages: [...c.messages, ''] }));
   const removeVariation = (i: number) => setConfig(c => ({ ...c, messages: c.messages.filter((_, idx) => idx !== i) }));
 
-  const getRandomMessage = () => {
-    const valid = config.messages.filter(m => m.trim());
-    return valid[Math.floor(Math.random() * valid.length)] || '';
-  };
-
-  const getRandomDelay = () =>
-    Math.floor(Math.random() * (config.delayMax - config.delayMin + 1)) + config.delayMin;
-
   const handleStart = async () => {
     if (!config.messages.some(m => m.trim())) return setError('Digite pelo menos uma mensagem');
     if (!config.instanceId) return setError('Selecione uma instância');
+    if (config.sourceType === 'group' && !config.groupId) return setError('Selecione um grupo');
+    if (config.sourceType === 'xlsx' && config.xlsxNumbers.length === 0) return setError('Carregue um arquivo com números');
     setError('');
     abortRef.current = false;
-    cancelResolveRef.current = null;
-    sentNumbersRef.current = new Set();
 
     setCampaign({ status: 'loading_participants', total: 0, sent: 0, failed: 0, skipped: 0, current: '', startedAt: Date.now(), estimatedEnd: null, numbers: [], currentIndex: 0 });
 
-    let numbers: string[] = [];
-    let adminNumbers: Set<string> = new Set();
-
-    if (config.sourceType === 'group') {
-      if (!config.groupId) { setError('Selecione um grupo'); setCampaign(null); return; }
-      try {
-        const data = await fetchAPI(`/groups/participants/${config.instanceId}/${encodeURIComponent(config.groupId)}`);
-        numbers = data?.participants || [];
-        if (config.excludeAdmins && data?.admins) {
-          adminNumbers = new Set(data.admins);
-        }
-        if (numbers.length === 0) { setError('Nenhum participante encontrado'); setCampaign(null); return; }
-      } catch (err: any) {
-        setError(`Erro ao buscar participantes: ${err.message}`);
-        setCampaign(null);
-        return;
-      }
-    } else {
-      numbers = config.xlsxNumbers;
-      if (numbers.length === 0) { setError('Carregue um arquivo com números'); setCampaign(null); return; }
-    }
-
-    // Exclui admins
-    if (config.excludeAdmins && adminNumbers.size > 0) {
-      numbers = numbers.filter(n => !adminNumbers.has(n));
-    }
-
-    // Randomiza ordem
-    if (config.randomizeOrder) {
-      numbers = [...numbers].sort(() => Math.random() - 0.5);
-    }
-
-    setCampaign(c => ({ ...c!, status: 'running', total: numbers.length, numbers, startedAt: Date.now() }));
-
-    // Registrar campanha no backend para rastrear e permitir cancelamento
     try {
-      const campaignData = await fetchAPI('/disparador/registrar', {
+      // Disparo 100% no backend/VPS — continua mesmo com navegador fechado
+      const res = await fetchAPI('/disparador/iniciar', {
         method: 'POST',
         body: {
           instanceId: config.instanceId,
+          groupIds: config.sourceType === 'group' ? [config.groupId] : [],
+          xlsxNumbers: config.sourceType === 'xlsx' ? config.xlsxNumbers : [],
           message: config.messages.filter(m => m.trim())[0],
-          groupId: config.sourceType === 'group' ? config.groupId : undefined,
-          totalContacts: numbers.length,
+          interval: config.delayMin,
+          randomizeInterval: config.delayMax > config.delayMin,
+          randomizeMessage: config.messages.filter(m => m.trim()).length > 1,
+          excludeAdmins: config.excludeAdmins,
         },
       });
-      campaignIdRef.current = campaignData?.campaignId || null;
-    } catch { campaignIdRef.current = null; }
 
-    let sent = 0, failed = 0, skipped = 0;
-
-    for (let i = 0; i < numbers.length; i++) {
-      if (abortRef.current) break;
-
-      const number = numbers[i];
-
-      // Pula já enviados
-      if (config.skipAlreadySent && sentNumbersRef.current.has(number)) {
-        skipped++;
-        setCampaign(c => c ? { ...c, skipped, currentIndex: i + 1 } : null);
-        continue;
+      if (res.campaignId) {
+        campaignIdRef.current = res.campaignId;
+        setCampaign(c => ({ ...c!, status: 'running', total: res.totalContacts || 0, startedAt: Date.now() }));
+      } else {
+        setError(res.error || 'Erro ao iniciar campanha');
+        setCampaign(null);
       }
-
-      // Aguarda se pausado
-      while (true) {
-        const current = await new Promise<CampaignMetrics | null>(r => setTimeout(() => r(null), 100));
-        // verifica se está pausado via ref
-        if (!abortRef.current) break;
-        if (abortRef.current) break;
-        break;
-      }
-
-      if (abortRef.current) break;
-
-      setCampaign(c => c ? { ...c, current: number, currentIndex: i + 1 } : null);
-
-      const msg = getRandomMessage();
-      if (!msg) { skipped++; continue; }
-
-      // AbortController para cancelar o fetch imediatamente
-      const abortCtrl = new AbortController();
-      const abortHandler = () => abortCtrl.abort();
-      // Salvar o abort do fetch atual para ser chamado ao cancelar
-      cancelResolveRef.current = abortHandler as any;
-
-      try {
-        const result = await fetchAPI('/disparador/send-single', {
-          method: 'POST',
-          body: { instanceId: config.instanceId, number, message: msg },
-          signal: abortCtrl.signal,
-        });
-        if (result?.success) {
-          sent++;
-          sentNumbersRef.current.add(number);
-        } else if (result?.skipped) {
-          // Número inválido / não existe no WA — pula sem contar como falha
-          skipped++;
-        } else {
-          failed++;
-        }
-      } catch (err: any) {
-        // Se foi abortado pelo usuário, não conta como falha
-        if (err?.name === 'AbortError' || abortRef.current) {
-          break;
-        }
-        // Erro 503 = Evolution offline — para o disparo
-        if (err?.message?.includes('503') || err?.message?.includes('ECONNREFUSED')) {
-          abortRef.current = true;
-          break;
-        }
-        failed++;
-      }
-
-      cancelResolveRef.current = null;
-      if (abortRef.current) break;
-
-      // Calcula ETA
-      const avgDelay = (config.delayMin + config.delayMax) / 2;
-      const remaining = (numbers.length - i - 1) * avgDelay;
-      const estimatedEnd = Date.now() + remaining;
-
-      setCampaign(c => c ? { ...c, sent, failed, skipped, estimatedEnd } : null);
-
-      // Delay cancelável — resolve imediatamente ao cancelar
-      if (!abortRef.current) {
-        const delay = getRandomDelay();
-        await new Promise<void>(resolve => {
-          let timerRef: ReturnType<typeof setTimeout>;
-          // Registrar resolve para handlePause chamar diretamente
-          cancelResolveRef.current = () => { clearTimeout(timerRef); resolve(); };
-          timerRef = setTimeout(() => {
-            cancelResolveRef.current = null;
-            resolve();
-          }, delay);
-        });
-        cancelResolveRef.current = null;
-      }
-      if (abortRef.current) break;
-    }
-
-    const finalStatus = abortRef.current ? 'cancelled' : 'done';
-    setCampaign(c => c ? { ...c, status: finalStatus, current: '', estimatedEnd: null, sent, failed, skipped } : null);
-
-    // Finalizar campanha no backend com stats reais
-    if (campaignIdRef.current) {
-      fetchAPI(`/disparador/finalizar/${campaignIdRef.current}`, {
-        method: 'POST',
-        body: { sent, failed, status: finalStatus === 'done' ? 'completed' : 'cancelled' },
-      }).catch(() => {});
-      campaignIdRef.current = null;
+    } catch (err: any) {
+      setError(err.message || 'Erro ao iniciar');
+      setCampaign(null);
     }
   };
 
   const handlePause = () => {
     abortRef.current = true;
-    // Resolve imediatamente qualquer delay em espera
-    if (cancelResolveRef.current) {
-      cancelResolveRef.current();
-      cancelResolveRef.current = null;
-    }
     setCampaign(c => c ? { ...c, status: 'cancelled' } : null);
-    // Notificar backend para parar processamento
     if (campaignIdRef.current) {
-      fetchAPI(`/disparador/cancelar/${campaignIdRef.current}`, { method: 'POST' }).catch(() => {});
+      fetchAPI(`/disparador/parar/${campaignIdRef.current}`, { method: 'POST' }).catch(() => {});
       campaignIdRef.current = null;
     }
   };

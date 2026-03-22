@@ -191,6 +191,14 @@ router.post('/invite/:token', async (req: Request, res: Response) => {
   if (invite.used_at) return res.status(410).json({ error: 'Link já utilizado' });
   if (new Date(invite.expires_at) < new Date()) return res.status(410).json({ error: 'Link expirado' });
 
+  // Verificar se o convite é restrito a um email específico
+  // note pode conter "email:fulano@gmail.com" — se sim, só esse email pode usar
+  const inviteNote = invite.note || '';
+  const restrictedEmail = inviteNote.startsWith('email:') ? inviteNote.replace('email:', '').trim() : null;
+  if (restrictedEmail && email.toLowerCase() !== restrictedEmail.toLowerCase()) {
+    return res.status(403).json({ error: 'Este link de convite é exclusivo para outro email.' });
+  }
+
   const exists = await prisma.user.findUnique({ where: { email } });
   if (exists) return res.status(400).json({ error: 'Email já cadastrado. Faça login normalmente.' });
 
@@ -199,10 +207,10 @@ router.post('/invite/:token', async (req: Request, res: Response) => {
     data: { email, password: hash, fullName: fullName || email.split('@')[0], plan: invite.plan as any },
   });
 
-  // Marcar token como usado
-  await prisma.$executeRaw`
-    UPDATE invite_tokens SET used_by = ${user.id}, used_at = NOW() WHERE token = ${req.params.token}
-  `;
+  // Marcar token como usado IMEDIATAMENTE (uso único garantido)
+  await prisma.$executeRaw\`
+    UPDATE invite_tokens SET used_by = \${user.id}, used_at = NOW() WHERE token = \${req.params.token}
+  \`;
 
   const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET!, {
     expiresIn: (process.env.JWT_EXPIRES_IN || '7d') as any,

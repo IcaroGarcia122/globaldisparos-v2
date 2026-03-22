@@ -233,31 +233,44 @@ router.post('/iniciar', async (req: AuthRequest, res: Response) => {
     const userId = req.user!.id;
 
     if (!instanceId) return res.status(400).json({ error: 'instanceId é obrigatório' });
-    if (!groupIds?.length) return res.status(400).json({ error: 'Selecione pelo menos um grupo' });
     if (!message?.trim()) return res.status(400).json({ error: 'Mensagem é obrigatória' });
+
+    const { xlsxNumbers = [] } = req.body;
+    const hasGroups = groupIds?.length > 0;
+    const hasXlsx = xlsxNumbers.length > 0;
+    if (!hasGroups && !hasXlsx) return res.status(400).json({ error: 'Selecione um grupo ou carregue uma lista de números' });
 
     const instance = await prisma.whatsAppInstance.findUnique({ where: { id: parseInt(String(instanceId)) } });
     if (!instance) return res.status(404).json({ error: 'Instância não encontrada' });
     if (instance.status !== 'connected') return res.status(409).json({ error: 'Instância não está conectada' });
 
-    // Coleta participantes de todos os grupos
+    // Coleta contatos — de grupos OU de lista xlsx
     const allContacts = new Map<string, { number: string; name?: string }>();
     const allAdmins = new Set<string>();
 
-    for (const groupId of groupIds) {
-      try {
-        const { participants, admins } = await getParticipants(parseInt(String(instanceId)), groupId);
-        for (const phone of participants) {
-          if (!allContacts.has(phone)) allContacts.set(phone, { number: phone });
+    if (hasGroups) {
+      for (const groupId of groupIds) {
+        try {
+          const { participants, admins } = await getParticipants(parseInt(String(instanceId)), groupId);
+          for (const phone of participants) {
+            if (!allContacts.has(phone)) allContacts.set(phone, { number: phone });
+          }
+          admins.forEach((a: string) => allAdmins.add(a));
+        } catch (err: any) {
+          logger.warn(`[Campaign] Erro ao buscar participantes do grupo ${groupId}: ${err.message}`);
         }
-        admins.forEach(a => allAdmins.add(a));
-      } catch (err: any) {
-        logger.warn(`[Campaign] Erro ao buscar participantes do grupo ${groupId}: ${err.message}`);
+      }
+    }
+
+    if (hasXlsx) {
+      for (const num of xlsxNumbers) {
+        const clean = String(num).replace(/\D/g, '');
+        if (clean.length >= 10) allContacts.set(clean, { number: clean });
       }
     }
 
     if (allContacts.size === 0) {
-      return res.status(400).json({ error: 'Nenhum contato encontrado nos grupos selecionados' });
+      return res.status(400).json({ error: 'Nenhum contato encontrado' });
     }
 
     const contacts = Array.from(allContacts.values());
