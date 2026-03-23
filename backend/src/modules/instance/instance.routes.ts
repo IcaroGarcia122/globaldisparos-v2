@@ -13,9 +13,9 @@ const instanceName = (id: number) => `instance_${id}`;
 /** GET /api/instances */
 router.get('/', async (req: AuthRequest, res: Response) => {
   try {
-    const where = req.user!.role === 'admin'
-      ? { name: { not: { startsWith: 'deleted_' } } }
-      : { userId: req.user!.id, isActive: true, name: { not: { startsWith: 'deleted_' } } };
+    // Admin vê apenas suas próprias instâncias no dashboard normal
+    // Para ver instâncias de todos os usuários, usar o painel admin
+    const where = { userId: req.user!.id, isActive: true, name: { not: { startsWith: 'deleted_' } } };
     const instances = await prisma.whatsAppInstance.findMany({
       where,
       orderBy: { createdAt: 'desc' },
