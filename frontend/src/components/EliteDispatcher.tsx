@@ -291,16 +291,28 @@ const EliteDispatcher: React.FC = () => {
       numbers = text.split(/[\n\r,;\t]+/).map(l => l.replace(/\D/g, '')).filter(n => n.length >= 10 && n.length <= 13);
     }
 
-    // Garantir que números brasileiros tenham o código 55
+    // Normalizar números brasileiros para formato WhatsApp (55 + DDD + 9 + número)
     const normalized = numbers.map(n => {
-      // Remove tudo que não é dígito
       const d = n.replace(/\D/g, '');
-      // Se já começa com 55 e tem 12-13 dígitos = correto
-      if (d.startsWith('55') && d.length >= 12) return d;
-      // Se tem 10-11 dígitos = número brasileiro sem 55
-      if (d.length >= 10 && d.length <= 11) return '55' + d;
-      return d;
-    }).filter(n => n.length >= 12 && n.length <= 13);
+      let num = d;
+      
+      // Remove +55 ou 55 do início se tiver
+      if (num.startsWith('55') && num.length > 11) num = num.slice(2);
+      
+      // Agora num deve ter 10 ou 11 dígitos (DDD + número)
+      if (num.length === 10) {
+        // Fixo ou celular antigo sem o 9 — adicionar 9 após DDD
+        num = num.slice(0, 2) + '9' + num.slice(2);
+      }
+      
+      // Deve ter 11 dígitos agora (DDD + 9 + 8 dígitos)
+      if (num.length === 11) return '55' + num;
+      
+      // Se já tem 13 dígitos com 55 = ok
+      if (d.length === 13 && d.startsWith('55')) return d;
+      
+      return null; // inválido
+    }).filter((n): n is string => n !== null && n.length === 13);
     const unique = [...new Set(normalized)];
     setConfig(c => ({ ...c, xlsxNumbers: unique }));
   };
