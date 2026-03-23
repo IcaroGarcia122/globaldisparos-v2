@@ -69,31 +69,72 @@ const EliteDispatcher: React.FC = () => {
   // State para forçar re-render quando campaignId muda
   const [activeCampaignId, setActiveCampaignId] = useState<number | null>(null);
 
-  // Polling de progresso da campanha — atualiza a cada 3s enquanto rodando
+  // Socket + Polling: recebe progresso em tempo real via socket, polling como fallback
   useEffect(() => {
     if (!activeCampaignId) return;
 
+    // Socket listener
+    const token = localStorage.getItem('token');
+    if (token) {
+      import('@/utils/socketClient').then(({ initSocket, getSocket }) => {
+        initSocket(token);
+        const socket = getSocket();
+        if (!socket) return;
+
+        const onProgress = (data: any) => {
+          if (data.campaignId !== activeCampaignId) return;
+          setCampaign(c => c ? {
+            ...c,
+            sent: data.sent || 0,
+            failed: data.failed || 0,
+            current: data.currentContact || c.current,
+            estimatedEnd: data.remainingSeconds ? Date.now() + data.remainingSeconds * 1000 : c.estimatedEnd,
+          } : null);
+        };
+        const onDone = (data: any) => {
+          if (data.campaignId !== activeCampaignId) return;
+          setCampaign(c => c ? { ...c, status: 'done', sent: data.totalSent || c.sent, failed: data.totalFailed || c.failed } : null);
+          setActiveCampaignId(null);
+          campaignIdRef.current = null;
+        };
+        const onErr = (data: any) => {
+          if (data.campaignId !== activeCampaignId) return;
+          setCampaign(c => c ? { ...c, status: 'cancelled' } : null);
+          setActiveCampaignId(null);
+          campaignIdRef.current = null;
+        };
+
+        socket.on('campanha:progresso', onProgress);
+        socket.on('campanha:concluida', onDone);
+        socket.on('campanha:erro', onErr);
+
+        return () => {
+          socket.off('campanha:progresso', onProgress);
+          socket.off('campanha:concluida', onDone);
+          socket.off('campanha:erro', onErr);
+        };
+      }).catch(() => {});
+    }
+
+    // Polling como fallback (a cada 4s)
     const interval = setInterval(async () => {
       try {
         const data = await fetchAPI(`/campaigns/${activeCampaignId}`);
-        if (!data) return;
-        const newStatus = data.status === 'completed' ? 'done' :
-                          data.status === 'cancelled' ? 'cancelled' :
-                          data.status === 'running' ? 'running' : 'running';
+        if (!data || data._error) return;
         setCampaign(c => c ? {
           ...c,
-          sent: data.messagesSent || 0,
-          failed: data.messagesFailed || 0,
+          sent: data.messagesSent ?? c.sent,
+          failed: data.messagesFailed ?? c.failed,
           total: data.totalContacts || c.total,
-          status: newStatus,
+          status: data.status === 'completed' ? 'done' :
+                  data.status === 'cancelled' ? 'cancelled' : c.status,
         } : null);
         if (data.status === 'completed' || data.status === 'cancelled') {
           setActiveCampaignId(null);
           campaignIdRef.current = null;
-          clearInterval(interval);
         }
       } catch { /* ignora */ }
-    }, 3000);
+    }, 4000);
 
     return () => clearInterval(interval);
   }, [activeCampaignId]);
