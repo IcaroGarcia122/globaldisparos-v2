@@ -3,7 +3,7 @@ import { fetchAPI } from '@/config/api';
 import {
   Send, Loader2, AlertCircle, CheckCircle2, Users, Upload,
   RefreshCw, X, ChevronDown, ChevronUp, Zap, Shield,
-  BarChart3, Clock, TrendingUp, MessageSquare, AlertTriangle, StopCircle
+  BarChart3, Clock, TrendingUp, MessageSquare, AlertTriangle, StopCircle, PauseCircle, PlayCircle
 } from 'lucide-react';
 
 interface Group { id: string; name: string; participantsCount?: number; }
@@ -336,11 +336,25 @@ const EliteDispatcher: React.FC = () => {
     }
   };
 
+  const handlePauseCampaign = async () => {
+    const id = campaignIdRef.current;
+    if (!id) return;
+    setCampaign(c => c ? { ...c, status: 'paused' } : null);
+    fetchAPI(`/campaigns/${id}/pausar`, { method: 'POST' }).catch(() => {});
+  };
+
+  const handleResumeCampaign = async () => {
+    const id = campaignIdRef.current;
+    if (!id) return;
+    setCampaign(c => c ? { ...c, status: 'running' } : null);
+    fetchAPI(`/campaigns/${id}/retomar`, { method: 'POST' }).catch(() => {});
+  };
+
   const handleReset = () => { setCampaign(null); abortRef.current = false; };
 
   const filteredGroups = Array.isArray(groups) ? groups.filter(g => g.name?.toLowerCase().includes(groupSearch.toLowerCase())) : [];
   const selectedGroup = Array.isArray(groups) ? groups.find(g => g.id === config.groupId) : undefined;
-  const isCampaignActive = campaign && (campaign.status === 'running' || campaign.status === 'loading_participants');
+  const isCampaignActive = campaign && (campaign.status === 'running' || campaign.status === 'loading_participants' || campaign.status === 'paused');
   const pct = campaign && (campaign.total || 0) > 0 ? Math.round((((campaign.sent||0) + (campaign.failed||0) + (campaign.skipped||0)) / campaign.total) * 100) : 0;
 
   const formatTime = (ms: number) => {
@@ -366,6 +380,7 @@ const EliteDispatcher: React.FC = () => {
               <h2 className="text-xl font-black text-white uppercase tracking-tight">
                 {campaign.status === 'loading_participants' ? '⏳ Carregando...' :
                  campaign.status === 'running' ? '🚀 Disparo em Andamento' :
+                 campaign.status === 'paused' ? '⏸️ Disparo Pausado' :
                  campaign.status === 'done' ? '✅ Disparo Concluído' :
                  '🛑 Disparo Cancelado'}
               </h2>
@@ -455,12 +470,23 @@ const EliteDispatcher: React.FC = () => {
 
         {/* Botão cancelar */}
         {isCampaignActive && (
-          <button
-            onClick={handlePause}
-            className="w-full py-4 bg-red-500/20 border border-red-500/40 text-red-400 font-black text-sm uppercase rounded-xl hover:bg-red-500/30 transition-all flex items-center justify-center gap-2"
-          >
-            <StopCircle size={18} /> Parar Disparo
-          </button>
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              onClick={campaign?.status === 'paused' ? handleResumeCampaign : handlePauseCampaign}
+              className="w-full py-4 bg-amber-500/20 border border-amber-500/40 text-amber-400 font-black text-sm uppercase rounded-xl hover:bg-amber-500/30 transition-all flex items-center justify-center gap-2"
+            >
+              {campaign?.status === 'paused'
+                ? <><PlayCircle size={18} /> Retomar</>
+                : <><PauseCircle size={18} /> Pausar</>
+              }
+            </button>
+            <button
+              onClick={handlePause}
+              className="w-full py-4 bg-red-500/20 border border-red-500/40 text-red-400 font-black text-sm uppercase rounded-xl hover:bg-red-500/30 transition-all flex items-center justify-center gap-2"
+            >
+              <StopCircle size={18} /> Cancelar
+            </button>
+          </div>
         )}
       </div>
     );
