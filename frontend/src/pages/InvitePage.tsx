@@ -41,7 +41,8 @@ const InvitePage: React.FC = () => {
       if (res.token && res.user) {
         localStorage.setItem('token', res.token);
         localStorage.setItem('user', JSON.stringify(res.user));
-        navigate('/dashboard');
+        // Forçar reload para garantir que auth context reconhece o novo token
+        window.location.href = '/dashboard';
       }
     } catch (err: any) {
       setError(err?.message || 'Erro ao criar conta.');
