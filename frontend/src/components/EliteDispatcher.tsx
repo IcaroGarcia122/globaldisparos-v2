@@ -68,6 +68,28 @@ const EliteDispatcher: React.FC = () => {
 
   // State para forçar re-render quando campaignId muda
   const [activeCampaignId, setActiveCampaignId] = useState<number | null>(null);
+  const lastRealSentRef = useRef<{ sent: number; time: number; delay: number }>({ sent: 0, time: 0, delay: 30000 });
+
+  // Ticker local: atualiza a estimativa de progresso a cada 1s entre eventos reais
+  useEffect(() => {
+    if (!activeCampaignId) return;
+    const ticker = setInterval(() => {
+      const { sent, time, delay } = lastRealSentRef.current;
+      if (!time || !delay) return;
+      const elapsed = Date.now() - time;
+      const estimatedExtra = Math.floor(elapsed / delay);
+      if (estimatedExtra <= 0) return;
+      setCampaign(c => {
+        if (!c || c.status !== 'running') return c;
+        const estimated = Math.min(sent + estimatedExtra, c.total);
+        if (estimated <= c.sent) return c; // não volta atrás
+        const remaining = c.total - estimated;
+        const eta = remaining * delay;
+        return { ...c, sent: estimated, estimatedEnd: Date.now() + eta };
+      });
+    }, 1000);
+    return () => clearInterval(ticker);
+  }, [activeCampaignId]);
 
   // Socket + Polling: recebe progresso em tempo real via socket, polling como fallback
   useEffect(() => {
@@ -83,6 +105,12 @@ const EliteDispatcher: React.FC = () => {
 
         const onProgress = (data: any) => {
           if (data.campaignId !== activeCampaignId) return;
+          // Atualizar ref do ticker com dados reais
+          lastRealSentRef.current = {
+            sent: data.sent || 0,
+            time: Date.now(),
+            delay: data.intervalMs || lastRealSentRef.current.delay,
+          };
           setCampaign(c => c ? {
             ...c,
             sent: data.sent || 0,
@@ -144,9 +172,8 @@ const EliteDispatcher: React.FC = () => {
   useEffect(() => {
     // Carregar instâncias
     fetchAPI('/instances').then(data => {
-      const list = data?.data || data || [];
-      // Mostrar todas as instâncias — não filtrar por status aqui
-      // O backend já filtra isActive:true e exclui deleted_
+      const raw = data?.data || data || [];
+      const list = Array.isArray(raw) ? raw : [];
       setInstances(list);
       const conn = list.filter((i: Instance) => i.status === 'connected');
       if (conn.length === 1) setConfig(c => ({ ...c, instanceId: String(conn[0].id) }));
@@ -286,6 +313,7 @@ const EliteDispatcher: React.FC = () => {
       if (res.campaignId) {
         campaignIdRef.current = res.campaignId;
         setActiveCampaignId(res.campaignId);
+        lastRealSentRef.current = { sent: 0, time: Date.now(), delay: config.delayMin || 30000 };
         setCampaign(c => ({ ...c!, status: 'running', total: res.totalContacts || 0, startedAt: Date.now() }));
       } else {
         setError(res.error || 'Erro ao iniciar campanha');
