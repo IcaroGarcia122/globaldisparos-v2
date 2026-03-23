@@ -265,11 +265,34 @@ const EliteDispatcher: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
     setXlsxFileName(file.name);
-    const text = await file.text();
-    const numbers = text.split(/[\n\r,;]+/)
-      .map(l => l.replace(/\D/g, ''))
-      .filter(n => n.length >= 10 && n.length <= 15);
-    setConfig(c => ({ ...c, xlsxNumbers: [...new Set(numbers)] }));
+
+    const isXlsx = file.name.endsWith('.xlsx') || file.name.endsWith('.xls');
+    let numbers: string[] = [];
+
+    if (isXlsx) {
+      // Para xlsx: extrair todo texto dos bytes e buscar padrões de telefone
+      const buffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      // Decodificar como latin1 para preservar todos os bytes
+      let raw = '';
+      for (let i = 0; i < bytes.length; i++) {
+        raw += String.fromCharCode(bytes[i]);
+      }
+      // Buscar sequências que parecem telefones brasileiros
+      const phoneRegex = /(?:\b|[^\d])((?:55)?(?:[1-9]{2})(?:9\d{8}|\d{8}))(?:\b|[^\d])/g;
+      let match;
+      while ((match = phoneRegex.exec(raw)) !== null) {
+        const num = match[1].replace(/\D/g, '');
+        if (num.length >= 10 && num.length <= 13) numbers.push(num);
+      }
+    } else {
+      // CSV/TXT: ler como texto
+      const text = await file.text();
+      numbers = text.split(/[\n\r,;\t]+/).map(l => l.replace(/\D/g, '')).filter(n => n.length >= 10 && n.length <= 13);
+    }
+
+    const unique = [...new Set(numbers)];
+    setConfig(c => ({ ...c, xlsxNumbers: unique }));
   };
 
   const updateMessage = (index: number, value: string) => {
@@ -588,8 +611,8 @@ const EliteDispatcher: React.FC = () => {
           <div className="space-y-3">
             <label className="flex flex-col items-center justify-center w-full h-24 border-2 border-dashed border-white/10 rounded-xl cursor-pointer hover:border-brand-500/40 transition-all">
               <Upload size={20} className="text-slate-500 mb-1" />
-              <span className="text-slate-500 text-sm">{xlsxFileName || 'CSV ou TXT com números (um por linha)'}</span>
-              <input type="file" accept=".csv,.txt" onChange={handleXlsx} className="hidden" />
+              <span className="text-slate-500 text-sm">{xlsxFileName || 'CSV, TXT ou XLSX (Google Maps, planilhas)'}</span>
+              <input type="file" accept=".csv,.txt,.xlsx,.xls" onChange={handleXlsx} className="hidden" />
             </label>
             {config.xlsxNumbers.length > 0 && (
               <div className="flex items-center gap-2 p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
