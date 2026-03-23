@@ -50,6 +50,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 
 // ─── Controle de campanhas em execução ────────────────────────────────────────
 // Map local para controle de pause/cancel em tempo real (dentro do processo)
 // O status canônico fica no banco — sobrevive a restarts
+const cancelledCampaigns = new Set<number>();
 const runningCampaigns = new Map<number, { cancel: boolean; pause: boolean }>();
 
 // Ao iniciar o servidor, marcar como 'cancelled' campanhas que ficaram presas em 'running'
@@ -296,7 +297,7 @@ router.post('/iniciar', async (req: AuthRequest, res: Response) => {
 
     const campaign = await prisma.campaign.create({
       data: {
-        userId, instanceId,
+        userId, instanceId: parseInt(String(instanceId)),
         name: campaignName || `Campanha ${new Date().toLocaleString('pt-BR')}`,
         message, status: 'running',
         totalContacts: contacts.length,
@@ -373,7 +374,7 @@ router.post('/send-single', async (req: AuthRequest, res: Response) => {
 
     return res.json({ success: true, number });
   } catch (err: any) {
-    logger.warn(`[Campaign] send-single erro inesperado ${number}: ${err.message}`);
+    logger.warn(`[Campaign] send-single erro inesperado: ${err.message}`);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
