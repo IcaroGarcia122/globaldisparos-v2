@@ -123,8 +123,14 @@ class WhatsAppService {
   // ─── MENSAGENS ───────────────────────────────────────────────────────────────
 
   async sendText(instanceName: string, number: string, text: string): Promise<any> {
-    // Garante formato correto do número
-    const phone = number.replace(/\D/g, '');
+    // Normaliza número para formato WhatsApp brasileiro
+    let phone = number.replace(/\D/g, '');
+    // Remove 55 do início se tiver para reprocessar
+    if (phone.startsWith('55') && phone.length > 11) phone = phone.slice(2);
+    // Adiciona 9 se for fixo (10 dígitos) 
+    if (phone.length === 10) phone = phone.slice(0, 2) + '9' + phone.slice(2);
+    // Adiciona 55 se não tiver
+    if (phone.length === 11) phone = '55' + phone;
     const res = await this.client.post(`/message/sendText/${instanceName}`, {
       number: phone,
       text,
