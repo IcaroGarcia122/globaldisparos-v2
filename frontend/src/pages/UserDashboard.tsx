@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import HelpCenterTab from '@/components/HelpCenterTab';
 import ConnectWhatsApp from '@/components/ConnectWhatsAPP';
@@ -788,12 +788,12 @@ const UserDashboard: React.FC = () => {
       <main className="flex-1 p-4 pt-20 md:p-8 lg:p-16 overflow-y-auto bg-[#0d1117] lg:pt-16">
         <div className="max-w-7xl mx-auto">
           {/* EliteDispatcher permanece montado para não perder estado de campanha em andamento */}
-          <div style={{ display: activeTab === 'disparo' ? 'block' : 'none' }}>
-            <EliteDispatcher />
+          <div style={{ display: activeTab === 'disparo' ? 'block' : 'none' }} suppressHydrationWarning>
+            {(activeTab === 'disparo' || true) && <EliteDispatcher />}
           </div>
           {/* WarmupCloud permanece montado para não perder estado de aquecimento em andamento */}
-          <div style={{ display: activeTab === 'aquecimento' ? 'block' : 'none' }}>
-            <WarmupCloud />
+          <div style={{ display: activeTab === 'aquecimento' ? 'block' : 'none' }} suppressHydrationWarning>
+            {(activeTab === 'aquecimento' || true) && <WarmupCloud />}
           </div>
           {activeTab !== 'disparo' && activeTab !== 'aquecimento' && renderContent()}
         </div>
