@@ -265,10 +265,14 @@ async function sendNextBatch(key: string) {
       });
 
       logger.info(`[Warmup] ✅ ${state.instanceName} → ${state.phone}: "${msg}"`);
+      prisma.$executeRaw`UPDATE warmup_states SET total_sent=${state.totalSent}, session_sent=${state.sessionSent}, updated_at=NOW() WHERE instance_id=${state.instanceId}`.catch(() => {});
     } catch (err: any) {
       addLog(state, `Erro: ${err.message}`, phase.id, 'error');
       logger.warn(`[Warmup] ❌ Erro: ${err.message}`);
       emitToUser(state.userId, 'warmup:error', { instanceId: state.instanceId, error: err.message });
+      if (err.message?.includes('timeout') || err.message?.includes('ECONNREFUSED')) {
+        await sleep(30000, state);
+      }
     }
 
     // Delay intra-sessão (entre msgs)

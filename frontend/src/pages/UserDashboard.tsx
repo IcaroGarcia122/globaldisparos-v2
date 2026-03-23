@@ -687,7 +687,7 @@ const UserDashboard: React.FC = () => {
               {[
                 { name: 'Mensal', price: 'R$ 69,90', period: '/mês' },
                 { name: 'Trimestral', price: 'R$ 149,90', period: '/trim' },
-                { name: 'Anual', price: 'R$ 299,90', period: '/ano' },
+                { name: 'Anual', price: 'R$ 599,90', period: '/ano' },
               ].map((p, i) => (
                 <div key={i} className="dashboard-card text-center">
                   <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4">{p.name}</div>

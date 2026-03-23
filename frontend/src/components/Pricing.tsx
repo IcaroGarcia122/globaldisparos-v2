@@ -11,7 +11,7 @@ const Pricing: React.FC = () => {
       recommended: false,
       cta: 'ASSINAR AGORA',
       delay: '0ms',
-      link: 'https://go.diggion.com.br/h6g2fyssbt'
+      link: 'https://go.ironpayapp.com.br/qjuo4vl1oj'
     },
     {
       name: 'PLANO TRIMESTRAL',
@@ -21,17 +21,17 @@ const Pricing: React.FC = () => {
       recommended: true,
       cta: 'MAIS VENDIDO',
       delay: '200ms',
-      link: 'https://go.diggion.com.br/evlzb'
+      link: 'https://go.ironpayapp.com.br/apudn'
     },
     {
       name: 'PLANO ANUAL',
-      price: 'R$ 299,90',
+      price: 'R$ 599,90',
       period: '/ano',
       features: ['10 Números de WhatsApp', 'White Label', 'Painel Gerencial', 'Consultoria de Escala', 'API de Integração Total', 'Gerente de Contas'],
       recommended: false,
       cta: 'PLANO ANUAL',
       delay: '400ms',
-      link: 'https://go.diggion.com.br/qyu5l'
+      link: 'https://go.ironpayapp.com.br/zt3zz'
     }
   ];
 
