@@ -123,8 +123,9 @@ const EliteDispatcher: React.FC = () => {
         if (!data || data._error) return;
         setCampaign(c => c ? {
           ...c,
-          sent: data.messagesSent ?? c.sent,
-          failed: data.messagesFailed ?? c.failed,
+          // Só atualiza sent/failed se o valor do banco for MAIOR (evita reset)
+          sent: Math.max(c.sent || 0, data.messagesSent || 0),
+          failed: Math.max(c.failed || 0, data.messagesFailed || 0),
           total: data.totalContacts || c.total,
           status: data.status === 'completed' ? 'done' :
                   data.status === 'cancelled' ? 'cancelled' : c.status,
@@ -271,11 +272,14 @@ const EliteDispatcher: React.FC = () => {
           instanceId: config.instanceId,
           groupIds: config.sourceType === 'group' ? [config.groupId] : [],
           xlsxNumbers: config.sourceType === 'xlsx' ? config.xlsxNumbers : [],
+          messages: config.messages.filter(m => m.trim()),
           message: config.messages.filter(m => m.trim())[0],
           interval: config.delayMin,
           randomizeInterval: config.delayMax > config.delayMin,
           randomizeMessage: config.messages.filter(m => m.trim()).length > 1,
           excludeAdmins: config.excludeAdmins,
+          skipAlreadySent: config.skipAlreadySent,
+          randomizeOrder: config.randomizeOrder,
         },
       });
 
