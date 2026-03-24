@@ -40,9 +40,12 @@ const InvitePage: React.FC = () => {
       });
       if (res.token && res.user) {
         localStorage.setItem('token', res.token);
+        // Salvar user com planExpiresAt para mostrar dias restantes no painel
         localStorage.setItem('user', JSON.stringify(res.user));
-        // Forçar reload para garantir que auth context reconhece o novo token
         window.location.href = '/dashboard';
+      } else {
+        setError(res.error || 'Erro ao criar conta. Tente novamente.');
+        setLoading(false);
       }
     } catch (err: any) {
       setError(err?.message || 'Erro ao criar conta.');
