@@ -17,10 +17,7 @@ const FAQ: React.FC = () => {
       q: "Funciona para iPhone e Android?",
       a: "Sim! Como o acesso é via navegador e a conexão é via QR Code do WhatsApp, funciona perfeitamente independente do sistema operacional do seu celular."
     },
-    {
-      q: "Consigo integrar com meu site ou CRM?",
-      a: "Com certeza. Temos integração via Webhooks e API REST que permite conectar o Global Disparos a Hotmart, Kiwify, ActiveCampaign, e qualquer outra ferramenta que suporte webhooks."
-    },
+    ,
     {
       q: "Como recebo meu acesso após o pagamento?",
       a: "O envio é imediato. Assim que o pagamento for confirmado (via PIX ou Cartão), você receberá um e-mail com seus dados de login e link da nossa área de membros com tutoriais."

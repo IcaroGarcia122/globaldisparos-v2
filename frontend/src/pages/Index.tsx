@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import Hero from '../components/Hero';
-import Features from '../components/Features';
 import Achievements from '../components/Achievements';
 import Testimonials from '../components/Testimonials';
 import Pricing from '../components/Pricing';
@@ -38,7 +37,6 @@ const Index: React.FC = () => {
       
       <main>
         <Hero onCtaClick={handleScrollToPricing} />
-        <Features />
         <Achievements />
         <Testimonials />
         <Pricing />

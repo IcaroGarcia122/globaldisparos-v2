@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useScrollReveal } from '@/hooks/useScrollReveal';
 
 const Testimonials: React.FC = () => {
@@ -25,10 +25,31 @@ const Testimonials: React.FC = () => {
 
   const sectionRef = useScrollReveal();
 
+  const words = ['aprova', 'recomenda', 'confia', 'escala'];
+  const [wordIndex, setWordIndex] = useState(0);
+  const [displayed, setDisplayed] = useState('');
+  const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    const word = words[wordIndex];
+    let timeout: ReturnType<typeof setTimeout>;
+    if (!deleting && displayed.length < word.length) {
+      timeout = setTimeout(() => setDisplayed(word.slice(0, displayed.length + 1)), 100);
+    } else if (!deleting && displayed.length === word.length) {
+      timeout = setTimeout(() => setDeleting(true), 1800);
+    } else if (deleting && displayed.length > 0) {
+      timeout = setTimeout(() => setDisplayed(displayed.slice(0, -1)), 60);
+    } else if (deleting && displayed.length === 0) {
+      setDeleting(false);
+      setWordIndex((wordIndex + 1) % words.length);
+    }
+    return () => clearTimeout(timeout);
+  }, [displayed, deleting, wordIndex]);
+
   return (
     <section className="py-24 max-w-7xl mx-auto px-4" ref={sectionRef}>
       <div className="text-center mb-16 scroll-hidden">
-        <h2 className="text-3xl md:text-5xl font-bold mb-4 italic">Quem usa, <span className="text-emerald-500">aprova</span>.</h2>
+        <h2 className="text-3xl md:text-5xl font-bold mb-4 italic">Quem usa, <span className="text-brand-400">{displayed}<span className="animate-pulse">|</span></span>.</h2>
         <p className="text-slate-400">Junte-se a mais de 15.000 empreendedores que escalaram seus negócios.</p>
       </div>
       
@@ -36,7 +57,7 @@ const Testimonials: React.FC = () => {
         {testimonials.map((t, idx) => (
           <div key={idx} className="scroll-hidden glass-card p-8 rounded-3xl relative overflow-hidden group" style={{ transitionDelay: `${idx * 100}ms` }}>
             <div className="absolute top-0 right-0 opacity-10 group-hover:rotate-12 transition-transform">
-                <svg className="w-24 h-24 text-emerald-500" fill="currentColor" viewBox="0 0 24 24">
+                <svg className="w-24 h-24 text-brand-400" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M14.017 21L14.017 18C14.017 16.8954 14.9124 16 16.017 16H19.017C19.5693 16 20.017 15.5523 20.017 15V9C20.017 8.44772 19.5693 8 19.017 8H15.017C14.4647 8 14.017 8.44772 14.017 9V11M14.017 21H11.017C10.4647 21 10.017 20.5523 10.017 20V15C10.017 14.4477 10.4647 14 11.017 14H14.017M3.017 21L3.017 18C3.017 16.8954 3.91243 16 5.017 16H8.017C8.56928 16 9.017 15.5523 9.017 15V9C9.017 8.44772 8.56928 8 8.017 8H4.017C3.46472 8 3.017 8.44772 3.017 9V11M3.017 21H0.017C-0.535282 21 -1.017 20.5523 -1.017 20V15C-1.017 14.4477 -0.535282 14 0.017 14H3.017" />
                 </svg>
             </div>
