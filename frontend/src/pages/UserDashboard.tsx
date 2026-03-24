@@ -648,16 +648,29 @@ const UserDashboard: React.FC = () => {
             </header>
 
             <div className="dashboard-card">
-              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-8">
-                <div>
-                  <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Plano Atual</div>
-                  <div className="text-3xl font-black text-white italic uppercase tracking-tighter">--</div>
-                  <div className="text-brand-500 text-sm font-bold mt-1">--</div>
-                </div>
-                <div className="px-5 py-2 rounded-full text-[10px] font-black uppercase tracking-widest bg-amber-500/10 text-amber-500 border border-amber-500/20">
-                  Sem plano
-                </div>
-              </div>
+              {(() => {
+                const userData = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; } })();
+                const plan = userData.plan || null;
+                const expiresAt = userData.planExpiresAt ? new Date(userData.planExpiresAt) : null;
+                const daysLeft = expiresAt ? Math.max(0, Math.ceil((expiresAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24))) : null;
+                const planNames: Record<string, string> = { mensal: 'Plano Mensal', trimestral: 'Plano Trimestral', anual: 'Plano Anual', pro: 'Plano Pro', basic: 'Plano Básico', enterprise: 'Enterprise' };
+                const planLabel = plan ? (planNames[plan] || plan) : null;
+                const isActive = daysLeft === null ? false : daysLeft > 0;
+                return (
+                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-8">
+                    <div>
+                      <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Plano Atual</div>
+                      <div className="text-3xl font-black text-white italic uppercase tracking-tighter">{planLabel || '--'}</div>
+                      <div className="text-brand-500 text-sm font-bold mt-1">
+                        {daysLeft !== null ? `${daysLeft} dia(s) restante(s)` : '--'}
+                      </div>
+                    </div>
+                    <div className={`px-5 py-2 rounded-full text-[10px] font-black uppercase tracking-widest ${isActive ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-amber-500/10 text-amber-500 border border-amber-500/20'}`}>
+                      {isActive ? 'Ativo' : 'Sem plano'}
+                    </div>
+                  </div>
+                );
+              })()}
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
                 <div className="bg-white/5 p-5 rounded-2xl border border-white/5">
@@ -685,17 +698,17 @@ const UserDashboard: React.FC = () => {
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               {[
-                { name: 'Mensal', price: 'R$ 69,90', period: '/mês' },
-                { name: 'Trimestral', price: 'R$ 149,90', period: '/trim' },
-                { name: 'Anual', price: 'R$ 299,90', period: '/ano' },
+                { name: 'Mensal', price: 'R$ 69,90', period: '/mês', link: 'https://go.ironpayapp.com.br/qjuo4vl1oj' },
+                { name: 'Trimestral', price: 'R$ 149,90', period: '/trim', link: 'https://go.ironpayapp.com.br/apudn' },
+                { name: 'Anual', price: 'R$ 599,90', period: '/ano', link: 'https://go.ironpayapp.com.br/zt3zz' },
               ].map((p, i) => (
                 <div key={i} className="dashboard-card text-center">
                   <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4">{p.name}</div>
                   <div className="text-3xl font-black text-white italic tracking-tighter mb-1">{p.price}</div>
                   <div className="text-[10px] text-slate-600 uppercase tracking-widest mb-6">{p.period}</div>
-                  <button className="block w-full py-4 rounded-2xl bg-brand-600 hover:bg-brand-500 text-white font-black text-[10px] uppercase tracking-widest transition-all shadow-xl shadow-brand-500/20 active:scale-95">
+                  <a href={p.link} target="_blank" rel="noopener noreferrer" className="block w-full py-4 rounded-2xl bg-brand-600 hover:bg-brand-500 text-white font-black text-[10px] uppercase tracking-widest transition-all shadow-xl shadow-brand-500/20 active:scale-95 text-center">
                     Assinar
-                  </button>
+                  </a>
                 </div>
               ))}
             </div>

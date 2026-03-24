@@ -203,8 +203,12 @@ router.post('/invite/:token', async (req: Request, res: Response) => {
   if (exists) return res.status(400).json({ error: 'Email já cadastrado. Faça login normalmente.' });
 
   const hash = await bcrypt.hash(password, 10);
+  // Calcular expiração do plano baseado no tipo do convite
+  const planDaysMap: Record<string, number> = { mensal: 30, trimestral: 90, anual: 365, pro: 30, basic: 7, enterprise: 90 };
+  const planDays = planDaysMap[invite.plan] || 30;
+  const planExpiresAt = new Date(Date.now() + planDays * 24 * 60 * 60 * 1000);
   const user = await prisma.user.create({
-    data: { email, password: hash, fullName: fullName || email.split('@')[0], plan: invite.plan as any },
+    data: { email, password: hash, fullName: fullName || email.split('@')[0], plan: invite.plan as any, planExpiresAt },
   });
 
   // Marcar token como usado IMEDIATAMENTE (uso único garantido)
@@ -217,7 +221,7 @@ router.post('/invite/:token', async (req: Request, res: Response) => {
   });
 
   logger.info(`[Invite] Conta criada via convite: ${email} plano=${invite.plan}`);
-  return res.status(201).json({ token, user: { id: user.id, email: user.email, fullName: user.fullName, role: user.role, plan: user.plan } });
+  return res.status(201).json({ token, user: { id: user.id, email: user.email, fullName: user.fullName, role: user.role, plan: user.plan, planExpiresAt: user.planExpiresAt } });
 });
 
 /** GET /api/auth/admin/invites — lista convites gerados */
