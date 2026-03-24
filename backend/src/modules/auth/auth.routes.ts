@@ -356,4 +356,22 @@ router.get('/validate-payment-token/:token', async (req: Request, res: Response)
   return res.json({ valid: true, plan: row.plan });
 });
 
+
+/** GET /api/admin/logs — últimas linhas de log para o painel admin */
+router.get('/admin/logs', authenticate, async (req: AuthRequest, res: Response) => {
+  if (req.user!.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+  try {
+    const { execSync } = require('child_process');
+    const out = execSync('tail -n 200 /root/.pm2/logs/globaldisparos-out.log 2>/dev/null || echo ""').toString();
+    const err = execSync('tail -n 50 /root/.pm2/logs/globaldisparos-error.log 2>/dev/null || echo ""').toString();
+    const combined = [...out.split('\n'), ...err.split('\n')]
+      .filter(l => l.trim())
+      .map(l => l.replace(/^0\|globaldi \| /, ''))
+      .slice(-150);
+    return res.json({ logs: combined });
+  } catch {
+    return res.json({ logs: ['Erro ao ler logs'] });
+  }
+});
+
 export default router;

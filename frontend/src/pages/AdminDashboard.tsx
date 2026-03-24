@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { fetchAPI } from '@/config/api';
 
-type Tab = 'overview' | 'subscribers' | 'revenue';
+type Tab = 'overview' | 'subscribers' | 'revenue' | 'logs';
 
 interface User {
   id: string;
@@ -33,7 +33,7 @@ const PLAN_PRICES: Record<string, number> = {
   // fallback para planos antigos
   mensal: 69.90,
   trimestral: 149.90,
-  anual: 299.00,
+  anual: 599.90,
 };
 
 const PLAN_LABELS: Record<string, string> = {
@@ -169,7 +169,12 @@ const AdminDashboard: React.FC = () => {
 
   // Métricas
   const activeUsers    = users.filter(u => u.status === 'active');
-  const totalRevenue   = activeUsers.reduce((s, u) => s + (PLAN_PRICES[u.plan] ?? 0), 0);
+  // Receita: exclui usuários criados por convite (role='user' sem pagamento direto)
+  // Para diferenciar: usuários pagantes têm planExpiresAt definido via payment webhook
+  // Usuários de convite têm planExpiresAt definido via invite
+  // Por ora calculamos todos os planos ativos exceto basic
+  const paidUsers = activeUsers.filter(u => u.plan !== 'basic' && u.plan !== 'free');
+  const totalRevenue = paidUsers.reduce((s, u) => s + (PLAN_PRICES[u.plan] ?? 0), 0);
   const avgTicket      = activeUsers.length > 0 ? totalRevenue / activeUsers.length : 0;
   const totalMessages  = users.reduce((s, u) => s + u.messages_sent, 0);
   const totalInstances = users.reduce((s, u) => s + u.instances_count, 0);
@@ -189,6 +194,7 @@ const AdminDashboard: React.FC = () => {
     { id: 'overview'    as Tab, label: 'Visão Geral', icon: <LayoutGrid size={15} /> },
     { id: 'subscribers' as Tab, label: 'Usuários',    icon: <Users size={15} /> },
     { id: 'revenue'     as Tab, label: 'Receita',     icon: <DollarSign size={15} /> },
+    { id: 'logs'        as Tab, label: 'Logs Live',   icon: <Activity size={15} /> },
   ];
 
   const fmtDate = (d: string | null) => d ? new Date(d).toLocaleDateString('pt-BR') : '—';
@@ -724,8 +730,100 @@ const AdminDashboard: React.FC = () => {
           {activeTab === 'overview'    && renderOverview()}
           {activeTab === 'subscribers' && renderSubscribers()}
           {activeTab === 'revenue'     && renderRevenue()}
+          {activeTab === 'logs'        && <LiveLogs />}
         </div>
       </main>
+    </div>
+  );
+};
+
+
+// ─── Componente de Logs em Tempo Real ──────────────────────────────────────
+const LiveLogs: React.FC = () => {
+  const [logs, setLogs] = React.useState<string[]>([]);
+  const [connected, setConnected] = React.useState(false);
+  const [filter, setFilter] = React.useState('');
+  const bottomRef = React.useRef<HTMLDivElement>(null);
+  const wsRef = React.useRef<WebSocket | null>(null);
+
+  React.useEffect(() => {
+    const token = localStorage.getItem('token');
+    const wsUrl = window.location.origin.replace('https://', 'wss://').replace('http://', 'ws://') + '/api/admin/logs/stream?token=' + token;
+
+    // Fallback: polling de logs via API
+    const pollLogs = async () => {
+      try {
+        const data = await fetchAPI('/admin/logs');
+        if (data?.logs) {
+          setLogs(data.logs);
+          setConnected(true);
+        }
+      } catch { /* ignora */ }
+    };
+
+    pollLogs();
+    const interval = setInterval(pollLogs, 2000);
+    return () => clearInterval(interval);
+  }, []);
+
+  React.useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [logs]);
+
+  const filtered = filter ? logs.filter(l => l.toLowerCase().includes(filter.toLowerCase())) : logs;
+
+  const getColor = (line: string) => {
+    if (line.includes('error') || line.includes('Error') || line.includes('❌')) return 'text-red-400';
+    if (line.includes('warn') || line.includes('Warn') || line.includes('⚠️')) return 'text-yellow-400';
+    if (line.includes('✅') || line.includes('info') || line.includes('Info')) return 'text-emerald-400';
+    if (line.includes('[Campaign]')) return 'text-blue-400';
+    if (line.includes('[Warmup]')) return 'text-purple-400';
+    if (line.includes('[Webhook]')) return 'text-cyan-400';
+    return 'text-slate-300';
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="dashboard-card">
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-4">
+          <div className="flex items-center gap-3">
+            <div className={`w-2 h-2 rounded-full ${connected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
+            <span className="text-xs font-black text-slate-400 uppercase tracking-widest">
+              {connected ? 'Live — atualizando a cada 2s' : 'Conectando...'}
+            </span>
+          </div>
+          <input
+            type="text"
+            placeholder="Filtrar logs..."
+            value={filter}
+            onChange={e => setFilter(e.target.value)}
+            className="w-full md:w-64 px-4 py-2 bg-slate-900 border border-white/10 rounded-xl text-xs text-white outline-none focus:border-brand-500/50"
+          />
+        </div>
+        <div className="bg-black/60 rounded-xl p-4 h-[500px] overflow-y-auto font-mono text-xs border border-white/5">
+          {filtered.length === 0 ? (
+            <div className="flex items-center justify-center h-full text-slate-600">
+              <Activity size={32} className="mr-2" /> Aguardando logs...
+            </div>
+          ) : (
+            filtered.map((line, i) => (
+              <div key={i} className={`py-0.5 ${getColor(line)}`}>
+                {line}
+              </div>
+            ))
+          )}
+          <div ref={bottomRef} />
+        </div>
+        <div className="flex justify-between items-center mt-3">
+          <span className="text-[10px] text-slate-600">{filtered.length} linhas</span>
+          <button
+            onClick={() => setLogs([])}
+            className="text-[10px] font-black text-slate-500 hover:text-red-400 uppercase tracking-widest transition-all"
+          >
+            Limpar
+          </button>
+        </div>
+      </div>
     </div>
   );
 };
