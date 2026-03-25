@@ -532,7 +532,7 @@ const VIPDashboard: React.FC<VIPDashboardProps> = ({ onLogout }) => {
           {
             title: 'Placa de 500k',
             subtitle: 'Expert Global',
-            image: '5hFcMKsF/Chat-GPT-Image-23-de-mar-de-2026-18-26-06.png',
+            image: 'https://i.ibb.co/5hFcMKsF/Chat-GPT-Image-23-de-mar-de-2026-18-26-06.png',
             desc: 'Concedida ao atingir 500 mil disparos entregues.',
             color: 'border-brand-500/50 shadow-[0_0_30px_rgba(59,130,246,0.2)]'
           },
