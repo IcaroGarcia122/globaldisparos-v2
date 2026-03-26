@@ -239,7 +239,7 @@ router.post('/invite/:token', async (req, res) => {
     });
     // Marcar token como usado IMEDIATAMENTE (uso único garantido)
     await database_1.default.$executeRaw `
-    UPDATE invite_tokens SET used_by = \${user.id}, used_at = NOW() WHERE token = \${req.params.token}
+    UPDATE invite_tokens SET used_by = ${user.id}, used_at = NOW() WHERE token = ${req.params.token}
   `;
     const token = jsonwebtoken_1.default.sign({ userId: user.id }, process.env.JWT_SECRET, {
         expiresIn: (process.env.JWT_EXPIRES_IN || '7d'),

@@ -213,7 +213,7 @@ router.post('/invite/:token', async (req: Request, res: Response) => {
 
   // Marcar token como usado IMEDIATAMENTE (uso único garantido)
   await prisma.$executeRaw`
-    UPDATE invite_tokens SET used_by = \${user.id}, used_at = NOW() WHERE token = \${req.params.token}
+    UPDATE invite_tokens SET used_by = ${user.id}, used_at = NOW() WHERE token = ${req.params.token}
   `;
 
   const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET!, {
