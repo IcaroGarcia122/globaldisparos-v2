@@ -33,11 +33,16 @@ class WhatsAppService {
     const res = await this.client.get('/instance/fetchInstances');
     const list = Array.isArray(res.data) ? res.data : (res.data?.value || []);
     return list.map((item: any) => {
+      // Evolution API v2: dados diretos no item, sem wrapper instance
       const inst = item.instance || item;
+      const name = inst.instanceName || inst.name || item.name;
+      const status = inst.connectionStatus || inst.state || inst.status || 'close';
       return {
-        instanceName: inst.instanceName || inst.name,
-        status: inst.state || inst.status || inst.connectionStatus || 'close',
-        ownerJid: inst.owner || inst.ownerJid || null,
+        instanceName: name,
+        status: status === 'open' ? 'connected' : status === 'connecting' ? 'connecting' : 'disconnected',
+        ownerJid: inst.ownerJid || inst.owner || null,
+        profileName: inst.profileName || null,
+        profilePicUrl: inst.profilePicUrl || null,
         ...inst,
       };
     });
@@ -75,7 +80,9 @@ class WhatsAppService {
   async getInstanceState(name: string): Promise<string> {
     try {
       const res = await this.client.get(`/instance/connectionState/${name}`);
-      return res.data?.instance?.state || res.data?.state || 'close';
+      // Evolution v2: { instance: { instanceName, state } } ou { state } ou { connectionStatus }
+      const state = res.data?.instance?.state || res.data?.state || res.data?.connectionStatus || 'close';
+      return state;
     } catch {
       return 'close';
     }
