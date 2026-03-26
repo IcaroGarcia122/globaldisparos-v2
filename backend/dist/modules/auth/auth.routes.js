@@ -230,8 +230,12 @@ router.post('/invite/:token', async (req, res) => {
     if (exists)
         return res.status(400).json({ error: 'Email já cadastrado. Faça login normalmente.' });
     const hash = await bcryptjs_1.default.hash(password, 10);
+    // Calcular expiração do plano baseado no tipo do convite
+    const planDaysMap = { mensal: 30, trimestral: 90, anual: 365, pro: 30, basic: 7, enterprise: 90 };
+    const planDays = planDaysMap[invite.plan] || 30;
+    const planExpiresAt = new Date(Date.now() + planDays * 24 * 60 * 60 * 1000);
     const user = await database_1.default.user.create({
-        data: { email, password: hash, fullName: fullName || email.split('@')[0], plan: invite.plan },
+        data: { email, password: hash, fullName: fullName || email.split('@')[0], plan: invite.plan, planExpiresAt },
     });
     // Marcar token como usado IMEDIATAMENTE (uso único garantido)
     await database_1.default.$executeRaw `
@@ -241,7 +245,7 @@ router.post('/invite/:token', async (req, res) => {
         expiresIn: (process.env.JWT_EXPIRES_IN || '7d'),
     });
     logger_1.default.info(`[Invite] Conta criada via convite: ${email} plano=${invite.plan}`);
-    return res.status(201).json({ token, user: { id: user.id, email: user.email, fullName: user.fullName, role: user.role, plan: user.plan } });
+    return res.status(201).json({ token, user: { id: user.id, email: user.email, fullName: user.fullName, role: user.role, plan: user.plan, planExpiresAt: user.planExpiresAt } });
 });
 /** GET /api/auth/admin/invites — lista convites gerados */
 router.get('/admin/invites', auth_middleware_1.authenticate, async (req, res) => {
@@ -359,6 +363,24 @@ router.get('/validate-payment-token/:token', async (req, res) => {
     if (new Date(row.expires_at) < new Date())
         return res.status(410).json({ error: 'Link expirado. Solicite suporte.' });
     return res.json({ valid: true, plan: row.plan });
+});
+/** GET /api/admin/logs — últimas linhas de log para o painel admin */
+router.get('/admin/logs', auth_middleware_1.authenticate, async (req, res) => {
+    if (req.user.role !== 'admin')
+        return res.status(403).json({ error: 'Acesso negado' });
+    try {
+        const { execSync } = require('child_process');
+        const out = execSync('tail -n 200 /root/.pm2/logs/globaldisparos-out.log 2>/dev/null || echo ""').toString();
+        const err = execSync('tail -n 50 /root/.pm2/logs/globaldisparos-error.log 2>/dev/null || echo ""').toString();
+        const combined = [...out.split('\n'), ...err.split('\n')]
+            .filter(l => l.trim())
+            .map(l => l.replace(/^0\|globaldi \| /, ''))
+            .slice(-150);
+        return res.json({ logs: combined });
+    }
+    catch {
+        return res.json({ logs: ['Erro ao ler logs'] });
+    }
 });
 exports.default = router;
 //# sourceMappingURL=auth.routes.js.map

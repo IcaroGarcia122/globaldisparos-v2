@@ -171,7 +171,7 @@ async function runCampaign(campaignId, instanceName, contacts, message, options,
             try {
                 await whatsapp_service_1.default.sendText(instanceName, contact.number, finalMsg);
                 sent++;
-                await database_1.default.whatsAppInstance.update({
+                await database_1.default.whatsAppInstance.updateMany({
                     where: { name: instanceName },
                     data: { totalMessagesSent: { increment: 1 }, dailyMessagesSent: { increment: 1 }, lastMessageAt: new Date() },
                 }).catch(() => { });
@@ -179,7 +179,7 @@ async function runCampaign(campaignId, instanceName, contacts, message, options,
             catch (err) {
                 failed++;
                 logger_1.default.warn(`[Campaign] Falha ${contact.number}: ${err.message}`);
-                await database_1.default.whatsAppInstance.update({
+                await database_1.default.whatsAppInstance.updateMany({
                     where: { name: instanceName },
                     data: { totalMessagesFailed: { increment: 1 } },
                 }).catch(() => { });

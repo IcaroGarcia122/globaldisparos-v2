@@ -60,14 +60,14 @@ async function processJob(job: Job<SendMessageJob>) {
     await whatsappService.sendText(instanceName, phoneNumber, personalizedMsg);
     success = true;
 
-    await prisma.whatsAppInstance.update({
+    await prisma.whatsAppInstance.updateMany({
       where: { name: instanceName },
       data: { totalMessagesSent: { increment: 1 }, dailyMessagesSent: { increment: 1 }, lastMessageAt: new Date() },
     }).catch(() => {});
   } catch (err: any) {
     logger.warn(`[Worker] Falha ao enviar para ${phoneNumber}: ${err.message}`);
 
-    await prisma.whatsAppInstance.update({
+    await prisma.whatsAppInstance.updateMany({
       where: { name: instanceName },
       data: { totalMessagesFailed: { increment: 1 } },
     }).catch(() => {});
@@ -101,7 +101,7 @@ async function startWorker() {
   }
 
   const worker = new Worker(QUEUES.SEND_MESSAGES, processJob, {
-    connection: redis,
+    connection: redis as any,
     concurrency: 2, // 2 jobs simultâneos por worker
   });
 

@@ -173,7 +173,7 @@ const activeWarmups = new Map<string, WarmupState>();
 // Quando o backend reinicia (dev ou produção), retoma warmups que estavam ativos
 async function restoreActiveWarmups() {
   try {
-    const rows: any[] = await prisma.$queryRaw`
+    const rows: any[] = await prisma.$queryRaw<any[]>`
       SELECT ws.*, wi.phone_number, wi.name as instance_name, wi.user_id
       FROM warmup_states ws
       JOIN whatsapp_instances wi ON wi.id = ws.instance_id
@@ -390,7 +390,7 @@ router.post('/start', async (req: AuthRequest, res: Response) => {
   }
 
   // Verificar se há estado salvo no banco via SQL raw (independe do prisma generate)
-  const savedRows: any[] = await prisma.$queryRaw`SELECT * FROM warmup_states WHERE instance_id = ${instId} LIMIT 1`.catch(() => []);
+  const savedRows: any[] = await prisma.$queryRaw<any[]>`SELECT * FROM warmup_states WHERE instance_id = ${instId} LIMIT 1`.catch(() => []);
   const saved = savedRows[0] || null;
 
   const now = Date.now();
@@ -494,7 +494,7 @@ router.get('/status', async (req: AuthRequest, res: Response) => {
     const state = activeWarmups.get(key);
     if (!state) {
       // Buscar último estado salvo no banco via SQL raw (independe do prisma generate)
-      const rows: any[] = await prisma.$queryRaw`SELECT * FROM warmup_states WHERE instance_id = ${parseInt(key)} LIMIT 1`.catch(() => []);
+      const rows: any[] = await prisma.$queryRaw<any[]>`SELECT * FROM warmup_states WHERE instance_id = ${parseInt(key)} LIMIT 1`.catch(() => []);
       const saved = rows[0] || null;
       const now = Date.now();
       let savedDay = 1;

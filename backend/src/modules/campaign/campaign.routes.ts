@@ -152,14 +152,14 @@ async function runCampaign(
       try {
         await whatsappService.sendText(instanceName, contact.number, finalMsg);
         sent++;
-        await prisma.whatsAppInstance.update({
+        await prisma.whatsAppInstance.updateMany({
           where: { name: instanceName },
           data: { totalMessagesSent: { increment: 1 }, dailyMessagesSent: { increment: 1 }, lastMessageAt: new Date() },
         }).catch(() => {});
       } catch (err: any) {
         failed++;
         logger.warn(`[Campaign] Falha ${contact.number}: ${err.message}`);
-        await prisma.whatsAppInstance.update({
+        await prisma.whatsAppInstance.updateMany({
           where: { name: instanceName },
           data: { totalMessagesFailed: { increment: 1 } },
         }).catch(() => {});

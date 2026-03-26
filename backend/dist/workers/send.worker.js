@@ -77,14 +77,14 @@ async function processJob(job) {
     try {
         await whatsapp_service_1.default.sendText(instanceName, phoneNumber, personalizedMsg);
         success = true;
-        await database_1.default.whatsAppInstance.update({
+        await database_1.default.whatsAppInstance.updateMany({
             where: { name: instanceName },
             data: { totalMessagesSent: { increment: 1 }, dailyMessagesSent: { increment: 1 }, lastMessageAt: new Date() },
         }).catch(() => { });
     }
     catch (err) {
         logger_1.default.warn(`[Worker] Falha ao enviar para ${phoneNumber}: ${err.message}`);
-        await database_1.default.whatsAppInstance.update({
+        await database_1.default.whatsAppInstance.updateMany({
             where: { name: instanceName },
             data: { totalMessagesFailed: { increment: 1 } },
         }).catch(() => { });

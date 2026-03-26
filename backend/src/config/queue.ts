@@ -19,7 +19,7 @@ export function getQueue(name: string): Queue | null {
 
   if (!queues.has(name)) {
     const q = new Queue(name, {
-      connection: redis,
+      connection: redis as any,
       defaultJobOptions: {
         attempts: 3,
         backoff: { type: 'exponential', delay: 2000 },

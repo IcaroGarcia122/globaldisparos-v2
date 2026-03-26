@@ -168,7 +168,7 @@ router.post('/admin/invite', authenticate, async (req: AuthRequest, res: Respons
 
 /** GET /api/auth/invite/:token — valida token antes de mostrar o form */
 router.get('/invite/:token', async (req: Request, res: Response) => {
-  const rows: any[] = await prisma.$queryRaw`
+  const rows: any[] = await prisma.$queryRaw<any[]>`
     SELECT * FROM invite_tokens WHERE token = ${req.params.token} LIMIT 1
   `.catch(() => []);
   const invite = rows[0];
@@ -183,7 +183,7 @@ router.post('/invite/:token', async (req: Request, res: Response) => {
   const { email, password, fullName } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Email e senha obrigatórios' });
 
-  const rows: any[] = await prisma.$queryRaw`
+  const rows: any[] = await prisma.$queryRaw<any[]>`
     SELECT * FROM invite_tokens WHERE token = ${req.params.token} LIMIT 1
   `.catch(() => []);
   const invite = rows[0];
@@ -227,7 +227,7 @@ router.post('/invite/:token', async (req: Request, res: Response) => {
 /** GET /api/auth/admin/invites — lista convites gerados */
 router.get('/admin/invites', authenticate, async (req: AuthRequest, res: Response) => {
   if (req.user!.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
-  const rows: any[] = await prisma.$queryRaw`
+  const rows: any[] = await prisma.$queryRaw<any[]>`
     SELECT it.*, u.email as used_by_email
     FROM invite_tokens it
     LEFT JOIN users u ON u.id = it.used_by
@@ -281,7 +281,7 @@ router.post('/reset-password/:token', async (req: Request, res: Response) => {
   const { password } = req.body;
   if (!password || password.length < 6) return res.status(400).json({ error: 'Senha mínima de 6 caracteres' });
 
-  const rows: any[] = await prisma.$queryRaw`
+  const rows: any[] = await prisma.$queryRaw<any[]>`
     SELECT * FROM invite_tokens
     WHERE token = ${req.params.token} AND note = ${'reset_password'} LIMIT 1
   `.catch(() => []);
@@ -341,7 +341,7 @@ router.post('/payment-token', async (req: Request, res: Response) => {
 
 /** GET /api/auth/validate-payment-token/:token — frontend valida antes de mostrar o form */
 router.get('/validate-payment-token/:token', async (req: Request, res: Response) => {
-  const rows: any[] = await prisma.$queryRaw`
+  const rows: any[] = await prisma.$queryRaw<any[]>`
     SELECT * FROM invite_tokens
     WHERE token = ${req.params.token}
     AND note LIKE ${'payment%'}

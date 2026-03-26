@@ -265,7 +265,7 @@ router.get('/test-add/:instanceId/:groupId', authenticate, async (req: AuthReque
   
   const endpoints = [
     { method: 'POST', url: `${baseURL}/group/updateParticipant/${instanceName}?groupJid=${groupId}` },
-    { method: 'POST', url: `${baseURL}/group/updateParticipant/${instanceName}`, body: JSON.stringify({ groupJid, action:'add', participants:[] }) },
+    { method: 'POST', url: `${baseURL}/group/updateParticipant/${instanceName}`, body: JSON.stringify({ groupJid: groupId, action:'add', participants:[] }) },
     { method: 'PUT',  url: `${baseURL}/group/updateParticipant/${instanceName}?groupJid=${groupId}` },
   ];
 
@@ -299,7 +299,7 @@ router.post('/sync-participants/:instanceId', authenticate, async (req: AuthRequ
     // Executar em background
     setImmediate(async () => {
       try {
-        const evRes = await whatsappService.getEvolutionClient().get(
+        const evRes = await (await import("axios")).default.get(
           `/group/fetchAllGroups/${instanceName}?getParticipants=true`,
           { timeout: 180000 }
         );
