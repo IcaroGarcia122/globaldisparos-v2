@@ -211,9 +211,9 @@ router.post('/invite/:token', async (req: Request, res: Response) => {
     data: { email, password: hash, fullName: fullName || email.split('@')[0], plan: invite.plan as any, planExpiresAt },
   });
 
-  // Marcar token como usado IMEDIATAMENTE (uso único garantido)
+  const inviteToken = req.params.token;
   await prisma.$executeRaw`
-    UPDATE invite_tokens SET used_by = ${user.id}, used_at = NOW() WHERE token = ${req.params.token}
+    UPDATE invite_tokens SET used_by = ${user.id}, used_at = NOW() WHERE token = ${inviteToken}
   `;
 
   const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET!, {
