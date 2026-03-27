@@ -753,7 +753,7 @@ const LiveLogs: React.FC = () => {
     // Fallback: polling de logs via API
     const pollLogs = async () => {
       try {
-        const data = await fetchAPI('/admin/logs');
+        const data = await fetchAPI('/auth/admin/logs');
         if (data?.logs) {
           setLogs(data.logs);
           setConnected(true);
