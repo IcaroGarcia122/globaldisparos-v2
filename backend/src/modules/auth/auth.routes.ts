@@ -253,9 +253,10 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
 
   // Salvar token na tabela invite_tokens reutilizando para reset
   // Usar prefixo "reset_" no note para identificar
+  const planBasic = 'basic'; const noteReset = 'reset_password';
   await prisma.$executeRaw`
     INSERT INTO invite_tokens (token, plan, created_by, expires_at, note)
-    VALUES (${token}, ${'basic'}, ${user.id}, ${expires}, ${'reset_password'})
+    VALUES (${token}, ${planBasic}, ${user.id}, ${expires}, ${noteReset})
     ON CONFLICT (token) DO NOTHING
   `.catch(() => {});
 
@@ -322,7 +323,7 @@ router.post('/payment-token', async (req: Request, res: Response) => {
   // Reusar tabela invite_tokens — note = 'payment' para identificar
   await prisma.$executeRaw`
     INSERT INTO invite_tokens (token, plan, created_by, expires_at, note)
-    VALUES (${token}, ${plan}, ${1}, ${expires}, ${'payment:' + (transactionId || 'manual')})
+    VALUES (${token}, ${plan}, ${1}, ${expires}, ${('payment:' + (transactionId || 'manual'))})
     ON CONFLICT (token) DO NOTHING
   `.catch(() => {});
 

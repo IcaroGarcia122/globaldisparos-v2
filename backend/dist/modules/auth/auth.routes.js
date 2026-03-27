@@ -237,9 +237,9 @@ router.post('/invite/:token', async (req, res) => {
     const user = await database_1.default.user.create({
         data: { email, password: hash, fullName: fullName || email.split('@')[0], plan: invite.plan, planExpiresAt },
     });
-    // Marcar token como usado IMEDIATAMENTE (uso único garantido)
+    const inviteToken = req.params.token;
     await database_1.default.$executeRaw `
-    UPDATE invite_tokens SET used_by = ${user.id}, used_at = NOW() WHERE token = ${req.params.token}
+    UPDATE invite_tokens SET used_by = ${user.id}, used_at = NOW() WHERE token = ${inviteToken}
   `;
     const token = jsonwebtoken_1.default.sign({ userId: user.id }, process.env.JWT_SECRET, {
         expiresIn: (process.env.JWT_EXPIRES_IN || '7d'),
@@ -275,11 +275,10 @@ router.post('/forgot-password', async (req, res) => {
     const expires = new Date(Date.now() + 2 * 60 * 60 * 1000); // 2h
     // Salvar token na tabela invite_tokens reutilizando para reset
     // Usar prefixo "reset_" no note para identificar
-    await database_1.default.$executeRaw `
-    INSERT INTO invite_tokens (token, plan, created_by, expires_at, note)
-    VALUES (${token}, ${'basic'}, ${user.id}, ${expires}, ${'reset_password'})
-    ON CONFLICT (token) DO NOTHING
-  `.catch(() => { });
+    await (async () => {
+    const plan = 'basic'; const note = 'reset_password';
+    await database_1.default.$executeRaw`INSERT INTO invite_tokens (token, plan, created_by, expires_at, note) VALUES (${token}, ${plan}, ${user.id}, ${expires}, ${note}) ON CONFLICT (token) DO NOTHING`.catch(() => {});
+  })();
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const resetLink = `${frontendUrl}/reset-password/${token}`;
     logger_1.default.info(`[Auth] Reset de senha solicitado para ${email}: ${resetLink}`);
@@ -300,7 +299,7 @@ router.post('/reset-password/:token', async (req, res) => {
         return res.status(400).json({ error: 'Senha mínima de 6 caracteres' });
     const rows = await database_1.default.$queryRaw `
     SELECT * FROM invite_tokens
-    WHERE token = ${req.params.token} AND note = ${'reset_password'} LIMIT 1
+    WHERE token = ${req.params.token} AND note = 'reset_password' LIMIT 1
   `.catch(() => []);
     const row = rows[0];
     if (!row)
@@ -333,9 +332,10 @@ router.post('/payment-token', async (req, res) => {
     const token = crypto.randomBytes(32).toString('hex');
     const expires = new Date(Date.now() + 30 * 60 * 1000); // 30 minutos
     // Reusar tabela invite_tokens — note = 'payment' para identificar
+    const adminUserId = 1; const paymentNote = 'payment:' + (transactionId || 'manual');
     await database_1.default.$executeRaw `
     INSERT INTO invite_tokens (token, plan, created_by, expires_at, note)
-    VALUES (${token}, ${plan}, ${1}, ${expires}, ${'payment:' + (transactionId || 'manual')})
+    VALUES (${token}, ${plan}, ${adminUserId}, ${expires}, ${paymentNote})
     ON CONFLICT (token) DO NOTHING
   `.catch(() => { });
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
@@ -352,7 +352,7 @@ router.get('/validate-payment-token/:token', async (req, res) => {
     const rows = await database_1.default.$queryRaw `
     SELECT * FROM invite_tokens
     WHERE token = ${req.params.token}
-    AND note LIKE ${'payment%'}
+    AND note LIKE 'payment%'
     LIMIT 1
   `.catch(() => []);
     const row = rows[0];
