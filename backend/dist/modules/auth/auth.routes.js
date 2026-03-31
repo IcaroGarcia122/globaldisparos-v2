@@ -148,8 +148,18 @@ router.patch('/admin/users/:id', auth_middleware_1.authenticate, async (req, res
 router.delete('/admin/users/:id', auth_middleware_1.authenticate, async (req, res) => {
     if (req.user.role !== 'admin')
         return res.status(403).json({ error: 'Acesso negado' });
-    await database_1.default.user.delete({ where: { id: parseInt(req.params.id) } });
-    return res.json({ ok: true });
+    const userId = parseInt(req.params.id);
+    try {
+        // Remover FKs antes de deletar usuário
+        await database_1.default.$executeRaw `DELETE FROM invite_tokens WHERE used_by = ${userId} OR created_by = ${userId}`.catch(() => { });
+        await database_1.default.whatsAppInstance.deleteMany({ where: { userId } }).catch(() => { });
+        await database_1.default.campaign.deleteMany({ where: { userId } }).catch(() => { });
+        await database_1.default.user.delete({ where: { id: userId } });
+        return res.json({ ok: true });
+    }
+    catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
 });
 /** POST /api/auth/login-supabase — compatibilidade */
 router.post('/login-supabase', async (req, res) => {
@@ -275,10 +285,13 @@ router.post('/forgot-password', async (req, res) => {
     const expires = new Date(Date.now() + 2 * 60 * 60 * 1000); // 2h
     // Salvar token na tabela invite_tokens reutilizando para reset
     // Usar prefixo "reset_" no note para identificar
-    await (async () => {
-    const plan = 'basic'; const note = 'reset_password';
-    await database_1.default.$executeRaw`INSERT INTO invite_tokens (token, plan, created_by, expires_at, note) VALUES (${token}, ${plan}, ${user.id}, ${expires}, ${note}) ON CONFLICT (token) DO NOTHING`.catch(() => {});
-  })();
+    const planBasic = 'basic';
+    const noteReset = 'reset_password';
+    await database_1.default.$executeRaw `
+    INSERT INTO invite_tokens (token, plan, created_by, expires_at, note)
+    VALUES (${token}, ${planBasic}, ${user.id}, ${expires}, ${noteReset})
+    ON CONFLICT (token) DO NOTHING
+  `.catch(() => { });
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const resetLink = `${frontendUrl}/reset-password/${token}`;
     logger_1.default.info(`[Auth] Reset de senha solicitado para ${email}: ${resetLink}`);
@@ -299,7 +312,7 @@ router.post('/reset-password/:token', async (req, res) => {
         return res.status(400).json({ error: 'Senha mínima de 6 caracteres' });
     const rows = await database_1.default.$queryRaw `
     SELECT * FROM invite_tokens
-    WHERE token = ${req.params.token} AND note = 'reset_password' LIMIT 1
+    WHERE token = ${req.params.token} AND note = ${'reset_password'} LIMIT 1
   `.catch(() => []);
     const row = rows[0];
     if (!row)
@@ -332,10 +345,9 @@ router.post('/payment-token', async (req, res) => {
     const token = crypto.randomBytes(32).toString('hex');
     const expires = new Date(Date.now() + 30 * 60 * 1000); // 30 minutos
     // Reusar tabela invite_tokens — note = 'payment' para identificar
-    const adminUserId = 1; const paymentNote = 'payment:' + (transactionId || 'manual');
     await database_1.default.$executeRaw `
     INSERT INTO invite_tokens (token, plan, created_by, expires_at, note)
-    VALUES (${token}, ${plan}, ${adminUserId}, ${expires}, ${paymentNote})
+    VALUES (${token}, ${plan}, ${1}, ${expires}, ${('payment:' + (transactionId || 'manual'))})
     ON CONFLICT (token) DO NOTHING
   `.catch(() => { });
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
@@ -352,7 +364,7 @@ router.get('/validate-payment-token/:token', async (req, res) => {
     const rows = await database_1.default.$queryRaw `
     SELECT * FROM invite_tokens
     WHERE token = ${req.params.token}
-    AND note LIKE 'payment%'
+    AND note LIKE ${'payment%'}
     LIMIT 1
   `.catch(() => []);
     const row = rows[0];

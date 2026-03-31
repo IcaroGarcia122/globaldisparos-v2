@@ -87,7 +87,7 @@ async function runCampaign(
   campaignId: number,
   instanceName: string,
   contacts: Array<{ number: string; name?: string }>,
-  message: string,
+  message: string | string[],
   options: {
     intervalMs: number;
     randomizeInterval: boolean;
@@ -145,9 +145,14 @@ async function runCampaign(
       const contact = targets[i];
 
       // Personaliza mensagem
+      // Rotaciona entre variações a cada envio
+      const msgList = Array.isArray(message) ? message : [message];
+      const baseMsg = msgList.length > 1
+        ? msgList[Math.floor(Math.random() * msgList.length)]
+        : msgList[0];
       const finalMsg = options.randomizeMessage
-        ? randomizeMessage(message, contact)
-        : message.replace(/{nome}/gi, contact.name || 'Amigo').replace(/{numero}/gi, contact.number);
+        ? randomizeMessage(baseMsg, contact)
+        : baseMsg.replace(/{nome}/gi, contact.name || 'Amigo').replace(/{numero}/gi, contact.number);
 
       try {
         await whatsappService.sendText(instanceName, contact.number, finalMsg);
@@ -323,7 +328,7 @@ router.post('/iniciar', async (req: AuthRequest, res: Response) => {
       campaign.id,
       await getEvolutionName(instanceId),
       contacts,
-      finalMessage,
+      messageVariations.length > 1 ? messageVariations : finalMessage,
       { intervalMs: interval, randomizeInterval, randomizeMessage: doRandomize, excludeAdmins, adminNumbers: Array.from(allAdmins) },
       userId
     );

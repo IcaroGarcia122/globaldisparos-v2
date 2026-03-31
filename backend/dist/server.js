@@ -201,7 +201,13 @@ async function start() {
                     }
                     continue;
                 }
-                // Registra webhook usando nome real
+                // Pular instâncias com nomes inválidos
+                if (!evName || evName === '.' || evName.includes('/')) {
+                    logger_1.default.warn(`[Startup] Nome inválido ignorado: ${evName}`);
+                    continue;
+                }
+                // Registra webhook com delay para não sobrecarregar Evolution
+                await new Promise(r => setTimeout(r, 500)); // 500ms entre cada registro
                 await wha.registerWebhook(evName).catch(() => { });
                 logger_1.default.info(`[Startup] Webhook registrado: ${evName} (id=${dbInst.id})`);
                 const isOpen = evInst.status === 'open';
@@ -245,7 +251,7 @@ async function start() {
     });
 }
 process.on('unhandledRejection', (err) => logger_1.default.error('[Unhandled]', err));
-process.on('uncaughtException', (err) => { logger_1.default.error('[Uncaught]', err); process.exit(1); });
+process.on('uncaughtException', (err) => { logger_1.default.error('[Uncaught]', err); });
 process.on('SIGTERM', async () => { await database_2.default.$disconnect(); process.exit(0); });
 start();
 //# sourceMappingURL=server.js.map

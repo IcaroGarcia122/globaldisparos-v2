@@ -178,7 +178,13 @@ async function start() {
           continue;
         }
 
-        // Registra webhook usando nome real
+        // Pular instâncias com nomes inválidos
+        if (!evName || evName === '.' || evName.includes('/')) {
+          logger.warn(`[Startup] Nome inválido ignorado: ${evName}`);
+          continue;
+        }
+        // Registra webhook com delay para não sobrecarregar Evolution
+        await new Promise(r => setTimeout(r, 500)); // 500ms entre cada registro
         await wha.registerWebhook(evName).catch(() => {});
         logger.info(`[Startup] Webhook registrado: ${evName} (id=${dbInst.id})`);
 
@@ -224,7 +230,7 @@ async function start() {
 }
 
 process.on('unhandledRejection', (err: any) => logger.error('[Unhandled]', err));
-process.on('uncaughtException', (err: any) => { logger.error('[Uncaught]', err); process.exit(1); });
+process.on('uncaughtException', (err: any) => { logger.error('[Uncaught]', err); });
 process.on('SIGTERM', async () => { await prisma.$disconnect(); process.exit(0); });
 
 start();

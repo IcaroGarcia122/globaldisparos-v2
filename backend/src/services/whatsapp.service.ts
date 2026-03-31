@@ -12,7 +12,7 @@ class WhatsAppService {
     this.client = axios.create({
       baseURL,
       headers: { apikey: apiKey, 'Content-Type': 'application/json' },
-      timeout: 30000,
+      timeout: 60000,
     });
 
     this.client.interceptors.response.use(
@@ -68,7 +68,7 @@ class WhatsAppService {
         base64: false,
         events,
       },
-    });
+    }, { timeout: 90000 });
     return res.data;
   }
 

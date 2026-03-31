@@ -165,9 +165,14 @@ async function runCampaign(campaignId, instanceName, contacts, message, options,
                 break;
             const contact = targets[i];
             // Personaliza mensagem
+            // Rotaciona entre variações a cada envio
+            const msgList = Array.isArray(message) ? message : [message];
+            const baseMsg = msgList.length > 1
+                ? msgList[Math.floor(Math.random() * msgList.length)]
+                : msgList[0];
             const finalMsg = options.randomizeMessage
-                ? randomizeMessage(message, contact)
-                : message.replace(/{nome}/gi, contact.name || 'Amigo').replace(/{numero}/gi, contact.number);
+                ? randomizeMessage(baseMsg, contact)
+                : baseMsg.replace(/{nome}/gi, contact.name || 'Amigo').replace(/{numero}/gi, contact.number);
             try {
                 await whatsapp_service_1.default.sendText(instanceName, contact.number, finalMsg);
                 sent++;
@@ -318,7 +323,7 @@ router.post('/iniciar', async (req, res) => {
         const finalMessage = messageVariations.length > 1
             ? messageVariations[Math.floor(Math.random() * messageVariations.length)]
             : messageVariations[0] || message;
-        runCampaign(campaign.id, await getEvolutionName(instanceId), contacts, finalMessage, { intervalMs: interval, randomizeInterval, randomizeMessage: doRandomize, excludeAdmins, adminNumbers: Array.from(allAdmins) }, userId);
+        runCampaign(campaign.id, await getEvolutionName(instanceId), contacts, messageVariations.length > 1 ? messageVariations : finalMessage, { intervalMs: interval, randomizeInterval, randomizeMessage: doRandomize, excludeAdmins, adminNumbers: Array.from(allAdmins) }, userId);
     }
     catch (err) {
         logger_1.default.error(`[Campaign] Erro ao iniciar: ${err.message}`);

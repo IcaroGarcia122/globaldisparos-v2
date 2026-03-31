@@ -117,8 +117,17 @@ router.patch('/admin/users/:id', authenticate, async (req: AuthRequest, res: Res
 /** DELETE /api/auth/admin/users/:id — remover usuário */
 router.delete('/admin/users/:id', authenticate, async (req: AuthRequest, res: Response) => {
   if (req.user!.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
-  await prisma.user.delete({ where: { id: parseInt(req.params.id) } });
-  return res.json({ ok: true });
+  const userId = parseInt(req.params.id);
+  try {
+    // Remover FKs antes de deletar usuário
+    await prisma.$executeRaw`DELETE FROM invite_tokens WHERE used_by = ${userId} OR created_by = ${userId}`.catch(() => {});
+    await prisma.whatsAppInstance.deleteMany({ where: { userId } }).catch(() => {});
+    await prisma.campaign.deleteMany({ where: { userId } }).catch(() => {});
+    await prisma.user.delete({ where: { id: userId } });
+    return res.json({ ok: true });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 /** POST /api/auth/login-supabase — compatibilidade */

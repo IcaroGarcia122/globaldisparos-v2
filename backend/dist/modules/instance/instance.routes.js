@@ -68,6 +68,8 @@ router.post('/', async (req, res) => {
 router.post('/:id/connect', async (req, res) => {
     try {
         const id = parseInt(req.params.id);
+        if (!id || isNaN(id))
+            return res.status(400).json({ error: 'ID inválido' });
         const instance = await database_1.default.whatsAppInstance.findUnique({ where: { id } });
         if (!instance)
             return res.status(404).json({ error: 'Instância não encontrada' });
@@ -146,6 +148,8 @@ router.post('/:id/connect', async (req, res) => {
 router.get('/:id/qr', async (req, res) => {
     try {
         const id = parseInt(req.params.id);
+        if (!id || isNaN(id))
+            return res.status(400).json({ error: 'ID inválido' });
         const instance = await database_1.default.whatsAppInstance.findUnique({ where: { id }, select: { qrCode: true, status: true } });
         if (!instance)
             return res.status(404).json({ error: 'Instância não encontrada' });

@@ -69,6 +69,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 router.post('/:id/connect', async (req: AuthRequest, res: Response) => {
   try {
     const id = parseInt(req.params.id);
+    if (!id || isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
     const instance = await prisma.whatsAppInstance.findUnique({ where: { id } });
     if (!instance) return res.status(404).json({ error: 'Instância não encontrada' });
 
@@ -150,6 +151,7 @@ router.post('/:id/connect', async (req: AuthRequest, res: Response) => {
 router.get('/:id/qr', async (req: AuthRequest, res: Response) => {
   try {
     const id = parseInt(req.params.id);
+    if (!id || isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
     const instance = await prisma.whatsAppInstance.findUnique({ where: { id }, select: { qrCode: true, status: true } });
     if (!instance) return res.status(404).json({ error: 'Instância não encontrada' });
     return res.json({ qrCode: instance.qrCode, status: instance.status });
