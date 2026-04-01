@@ -52,10 +52,9 @@ if (process.env.FRONTEND_URL) {
 }
 app.use(cors({
   origin: (origin, cb) => {
-    // Permite requests sem origin (mobile, Postman, webhooks)
     if (!origin) return cb(null, true);
     if (allowedOrigins.includes(origin)) return cb(null, true);
-    cb(null, true); // Em produção, pode restringir aqui se necessário
+    cb(new Error(`CORS: origin not allowed: ${origin}`));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -110,7 +109,7 @@ async function start() {
       await prisma.user.create({
         data: { email: 'admin@gmail.com', password: hash, fullName: 'Administrador', role: 'admin', plan: 'enterprise', isActive: true },
       });
-      logger.info('[Seed] Admin criado: admin@gmail.com / vip2026');
+      logger.info('[Seed] Admin criado com sucesso');
     }
   } catch (err: any) {
     logger.warn(`[Seed] ${err.message}`);

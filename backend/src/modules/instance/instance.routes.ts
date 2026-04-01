@@ -136,8 +136,14 @@ router.post('/:id/connect', async (req: AuthRequest, res: Response) => {
       await prisma.whatsAppInstance.update({ where: { id }, data: { qrCode, status: 'connecting' } });
       emitToUser(instance.userId, 'qr_code', { instanceId: id, qrCode });
     } else {
+      // Race condition fix: webhook may have saved QR to DB while this request was processing
+      const fresh = await prisma.whatsAppInstance.findUnique({ where: { id }, select: { qrCode: true } });
+      if (fresh?.qrCode) {
+        qrCode = fresh.qrCode;
+        logger.info(`[Instance] QR recuperado do banco (webhook adiantou a resposta) para ${evName}`);
+      }
       await prisma.whatsAppInstance.update({ where: { id }, data: { status: 'connecting' } });
-      logger.warn(`[Instance] QR não disponível para ${evName}`);
+      if (!qrCode) logger.warn(`[Instance] QR não disponível para ${evName}`);
     }
 
     return res.json({ instanceId: id, qrCode, status: qrCode ? 'connecting' : 'pending' });

@@ -50,7 +50,6 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 
 // ─── Controle de campanhas em execução ────────────────────────────────────────
 // Map local para controle de pause/cancel em tempo real (dentro do processo)
 // O status canônico fica no banco — sobrevive a restarts
-const cancelledCampaigns = new Set<number>();
 const runningCampaigns = new Map<number, { cancel: boolean; pause: boolean }>();
 
 // Ao iniciar o servidor, marcar como 'cancelled' campanhas que ficaram presas em 'running'
@@ -85,6 +84,7 @@ function randomizeMessage(template: string, contact: { number: string; name?: st
 // ─── EXECUÇÃO DE CAMPANHA EM BACKGROUND ──────────────────────────────────────
 async function runCampaign(
   campaignId: number,
+  instanceId: number,
   instanceName: string,
   contacts: Array<{ number: string; name?: string }>,
   message: string | string[],
@@ -130,7 +130,7 @@ async function runCampaign(
       if (ctrl?.cancel) break;
 
       // Checar status no banco (fonte de verdade — funciona mesmo após restart parcial)
-      const camp = await prisma.campaign.findUnique({ where: { id: campaignId }, select: { status: true } });
+      let camp = await prisma.campaign.findUnique({ where: { id: campaignId }, select: { status: true } });
       if (!camp || camp.status === 'cancelled') break;
 
       // Aguarda se pausada (checa Map E banco)
@@ -139,6 +139,7 @@ async function runCampaign(
         const recheck = await prisma.campaign.findUnique({ where: { id: campaignId }, select: { status: true } });
         if (!recheck || recheck.status === 'cancelled') { runningCampaigns.get(campaignId) && (runningCampaigns.get(campaignId)!.cancel = true); break; }
         if (recheck.status === 'running') { if (runningCampaigns.get(campaignId)) runningCampaigns.get(campaignId)!.pause = false; break; }
+        camp = recheck; // atualiza referência para próxima iteração do while
       }
       if (runningCampaigns.get(campaignId)?.cancel) break;
 
@@ -157,15 +158,15 @@ async function runCampaign(
       try {
         await whatsappService.sendText(instanceName, contact.number, finalMsg);
         sent++;
-        await prisma.whatsAppInstance.updateMany({
-          where: { name: instanceName },
+        await prisma.whatsAppInstance.update({
+          where: { id: instanceId },
           data: { totalMessagesSent: { increment: 1 }, dailyMessagesSent: { increment: 1 }, lastMessageAt: new Date() },
         }).catch(() => {});
       } catch (err: any) {
         failed++;
         logger.warn(`[Campaign] Falha ${contact.number}: ${err.message}`);
-        await prisma.whatsAppInstance.updateMany({
-          where: { name: instanceName },
+        await prisma.whatsAppInstance.update({
+          where: { id: instanceId },
           data: { totalMessagesFailed: { increment: 1 } },
         }).catch(() => {});
       }
@@ -252,6 +253,7 @@ router.post('/iniciar', async (req: AuthRequest, res: Response) => {
 
     const instance = await prisma.whatsAppInstance.findUnique({ where: { id: parseInt(String(instanceId)) } });
     if (!instance) return res.status(404).json({ error: 'Instância não encontrada' });
+    if (instance.userId !== userId) return res.status(403).json({ error: 'Acesso negado' });
     if (instance.status !== 'connected') return res.status(409).json({ error: 'Instância não está conectada' });
 
     // Coleta contatos — de grupos OU de lista xlsx
@@ -290,15 +292,7 @@ router.post('/iniciar', async (req: AuthRequest, res: Response) => {
       contacts = contacts.sort(() => Math.random() - 0.5);
     }
 
-    // Excluir contatos que já receberam mensagem desta instância
-    if (skipAlreadySent) {
-      const recent = await prisma.campaign.findMany({
-        where: { instanceId: parseInt(String(instanceId)), status: 'completed', startedAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } },
-        select: { id: true }
-      });
-      // Por simplicidade, skipAlreadySent é respeitado via randomizeOrder por ora
-      // Para implementação completa precisaria de tabela de histórico de envios
-    }
+    // skipAlreadySent: requer tabela de histórico de envios — não implementado ainda
 
     const campaign = await prisma.campaign.create({
       data: {
@@ -326,6 +320,7 @@ router.post('/iniciar', async (req: AuthRequest, res: Response) => {
 
     runCampaign(
       campaign.id,
+      parseInt(String(instanceId)),
       await getEvolutionName(instanceId),
       contacts,
       messageVariations.length > 1 ? messageVariations : finalMessage,
@@ -347,6 +342,7 @@ router.post('/send-single', async (req: AuthRequest, res: Response) => {
 
     const instance = await prisma.whatsAppInstance.findUnique({ where: { id: parseInt(String(instanceId)) } });
     if (!instance) return res.status(404).json({ error: 'Instância não encontrada' });
+    if (instance.userId !== req.user!.id) return res.status(403).json({ error: 'Acesso negado' });
     if (instance.status !== 'connected') return res.status(400).json({ error: 'Instância não conectada' });
 
     let sendSuccess = false;
@@ -394,7 +390,9 @@ router.post('/enviar-xlsx', upload.single('file'), async (req: AuthRequest, res:
     if (!instanceId || !message) return res.status(400).json({ error: 'instanceId e message obrigatórios' });
 
     const instance = await prisma.whatsAppInstance.findUnique({ where: { id: parseInt(instanceId) } });
-    if (!instance || instance.status !== 'connected') return res.status(409).json({ error: 'Instância não conectada' });
+    if (!instance) return res.status(404).json({ error: 'Instância não encontrada' });
+    if (instance.userId !== userId) return res.status(403).json({ error: 'Acesso negado' });
+    if (instance.status !== 'connected') return res.status(409).json({ error: 'Instância não conectada' });
 
     const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
     const ws = wb.Sheets[wb.SheetNames[0]];
@@ -423,7 +421,7 @@ router.post('/enviar-xlsx', upload.single('file'), async (req: AuthRequest, res:
 
     res.status(201).json({ campaignId: campaign.id, totalContacts: contacts.length });
     const evNameRun = await getEvolutionName(instanceId);
-    runCampaign(campaign.id, evNameRun, contacts, message,
+    runCampaign(campaign.id, parseInt(instanceId), evNameRun, contacts, message,
       { intervalMs: parseInt(interval), randomizeInterval: Boolean(randomizeInterval), randomizeMessage: Boolean(doRandomize), excludeAdmins: false },
       userId
     );
@@ -655,17 +653,15 @@ router.post('/cancelar/:campaignId', async (req: AuthRequest, res: Response) => 
 
     if (isNaN(campaignId)) return res.status(400).json({ error: 'campaignId inválido' });
 
-    // Registrar como cancelada para parar o loop de envio
-    cancelledCampaigns.add(campaignId);
+    // Para loop de envio backend (se rodando via runCampaign)
+    const ctrl = runningCampaigns.get(campaignId);
+    if (ctrl) ctrl.cancel = true;
 
     // Atualizar status no banco
     await prisma.campaign.updateMany({
       where: { id: campaignId, userId },
       data: { status: 'cancelled', completedAt: new Date() },
     }).catch(() => {});
-
-    // Limpar da memória após 30s
-    setTimeout(() => cancelledCampaigns.delete(campaignId), 30000);
 
     logger.info(`[Campaign] Campanha ${campaignId} cancelada pelo usuário ${userId}`);
     return res.json({ success: true, campaignId });

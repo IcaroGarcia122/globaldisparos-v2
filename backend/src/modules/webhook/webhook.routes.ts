@@ -30,6 +30,16 @@ router.post('/evolution/:event?', async (req: Request, res: Response) => {
   // Responde IMEDIATAMENTE — Evolution tem timeout curto
   res.json({ received: true });
 
+  // Verifica apikey da Evolution se configurada
+  const evolutionKey = process.env.EVOLUTION_API_KEY;
+  if (evolutionKey) {
+    const bodyKey = req.body?.apikey || req.headers['apikey'];
+    if (bodyKey && bodyKey !== evolutionKey) {
+      logger.warn(`[Webhook] Requisição com apikey inválida — ignorada`);
+      return;
+    }
+  }
+
   try {
     const body = req.body;
     // v2 byEvents: event vem na URL (/evolution/QRCODE_UPDATED) ou no body
@@ -90,7 +100,12 @@ router.post('/evolution/:event?', async (req: Request, res: Response) => {
 
         await prisma.whatsAppInstance.update({
           where: { id: instance.id },
-          data: { status: 'connected', connectedAt: new Date(), qrCode: null, ...(phoneNumber ? { phoneNumber } : {}) },
+          data: {
+            status: 'connected',
+            qrCode: null,
+            ...(instance.connectedAt ? {} : { connectedAt: new Date() }),
+            ...(phoneNumber ? { phoneNumber } : {}),
+          },
         });
 
         logger.info(`✅ [Webhook] ${instanceName} CONECTADA${phoneNumber ? ` (${phoneNumber})` : ''}`);
@@ -196,25 +211,5 @@ router.get('/evolution/sync-number/:instanceName', async (req: Request, res: Res
   }
 });
 
-/** POST /api/webhook/diggion — pagamentos */
-router.post('/diggion', async (req: Request, res: Response) => {
-  try {
-    const { event, customer_email, amount, transaction_id, metadata } = req.body;
-    if (event === 'payment.approved') {
-      const user = await prisma.user.findUnique({ where: { email: customer_email } });
-      if (user) {
-        const expiresAt = new Date();
-        expiresAt.setDate(expiresAt.getDate() + (metadata?.duration || 30));
-        await prisma.user.update({ where: { id: user.id }, data: { plan: metadata?.plan, planExpiresAt: expiresAt } });
-        await prisma.payment.create({
-          data: { userId: user.id, diggionTransactionId: transaction_id, amount, status: 'approved', plan: metadata?.plan, planDuration: metadata?.duration, expiresAt },
-        });
-      }
-    }
-    return res.json({ received: true });
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message });
-  }
-});
 
 export default router;

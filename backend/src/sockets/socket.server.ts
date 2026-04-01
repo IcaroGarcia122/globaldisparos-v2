@@ -42,9 +42,7 @@ export function setupSocketServer(server: any): Server {
   io.on('connection', (socket: Socket) => {
     const userId = socket.data.userId;
     if (userId) {
-      // Registra em ambos os formatos que o frontend usa
       socket.join(`user:${userId}`);
-      socket.join(`user-${userId}`);
       logger.info(`[Socket] User ${userId} conectado: ${socket.id}`);
     }
 
@@ -68,7 +66,7 @@ export function getIO(): Server {
 /** Emite evento para um usuário específico */
 export function emitToUser(userId: number, event: string, data: any) {
   if (!io) return;
-  io.to(`user:${userId}`).to(`user-${userId}`).emit(event, data);
+  io.to(`user:${userId}`).emit(event, data);
 }
 
 /** Emite evento para uma sala de campanha */
