@@ -4,7 +4,7 @@ import HelpCenterTab from '@/components/HelpCenterTab';
 import ConnectWhatsApp from '@/components/ConnectWhatsAPP';
 import CreateInstance from '@/components/CreateInstance';
 import EliteDispatcher from '@/components/EliteDispatcher';
-import GroupToXlsxExporter from '@/components/GroupToXlsxExporter';
+import ContactListsManager from '@/components/ContactListsManager';
 import GroupManager from '@/components/GroupManager';
 import WarmupCloud from '@/components/WarmupCloud';
 import GoalsTracker from '@/components/GoalsTracker';
@@ -557,7 +557,7 @@ const UserDashboard: React.FC = () => {
         return <div />; {/* EliteDispatcher renderizado fora do switch para manter estado */}
 
       case 'contatos':
-        return <GroupToXlsxExporter />;
+        return <ContactListsManager />;
 
       case 'logs':
         if (!logsLoaded && !logsLoading) { setTimeout(() => loadLogs(1), 50); }
