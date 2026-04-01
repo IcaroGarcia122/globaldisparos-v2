@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { fetchAPI } from '@/config/api';
 import {
   Users, Upload, Loader2, AlertCircle, CheckCircle2, Search, ChevronRight,
-  ArrowLeft, Plus, Trash2, Download, Database, FileSpreadsheet, X, Filter,
+  ArrowLeft, Plus, Trash2, Download, Database, FileSpreadsheet, X, Filter, RefreshCw,
 } from 'lucide-react';
 
 type MainView = 'lists' | 'detail' | 'extract';
@@ -61,6 +61,7 @@ const ContactListsManager: React.FC = () => {
   const [extSearch, setExtSearch]           = useState('');
   const [extracting, setExtracting]         = useState(false);
   const [extractOriginListId, setExtractOriginListId] = useState<number | null>(null);
+  const [syncingGroups, setSyncingGroups]   = useState(false);
 
   // ── Load lists ───────────────────────────────────────────────────────────────
   const loadLists = async () => {
@@ -176,15 +177,36 @@ const ContactListsManager: React.FC = () => {
     finally { setLoadingInst(false); }
   };
 
+  const loadAllGroups = async (instId: string) => {
+    setLoadingGroups(true); setGroups([]); setError('');
+    try {
+      // Usa endpoint geral — retorna TODOS os grupos da instância, não só admin
+      const res = await fetchAPI(`/groups?instanceId=${instId}`);
+      const list = res?.groups || [];
+      setGroups(list);
+      if (list.length === 0 && !res?.loading) {
+        setError('Nenhum grupo encontrado. Tente sincronizar abaixo.');
+      }
+    } catch { setError('Erro ao carregar grupos'); }
+    finally { setLoadingGroups(false); }
+  };
+
+  const syncGroups = async () => {
+    if (!extInstId) return;
+    setSyncingGroups(true); setError('');
+    try {
+      await fetchAPI(`/groups/sync/${extInstId}`, { method: 'POST' });
+      // Aguarda 5s e recarrega — sync é background
+      await new Promise(r => setTimeout(r, 5000));
+      await loadAllGroups(extInstId);
+    } catch { setError('Erro ao sincronizar grupos'); }
+    finally { setSyncingGroups(false); }
+  };
+
   const selectExtInstance = async (instId: string) => {
     setExtInstId(instId);
     setExtractStep(2);
-    setLoadingGroups(true); setGroups([]); setError('');
-    try {
-      const res = await fetchAPI(`/groups?instanceId=${instId}`);
-      setGroups(res?.groups || []);
-    } catch { setError('Erro ao carregar grupos'); }
-    finally { setLoadingGroups(false); }
+    await loadAllGroups(instId);
   };
 
   const selectExtGroup = (g: Group) => {
@@ -312,7 +334,15 @@ const ContactListsManager: React.FC = () => {
         <div className="dashboard-card">
           <div className="flex items-center gap-4 mb-5">
             <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-500 border border-emerald-500/20 font-black text-sm">2</div>
-            <div className="flex-1"><h3 className="text-lg font-black text-white uppercase">Selecionar Grupo</h3><p className="text-sm text-slate-500">WhatsApp: <span className="text-white font-bold">{extInstSelected?.name}</span></p></div>
+            <div className="flex-1">
+              <h3 className="text-lg font-black text-white uppercase">Selecionar Grupo</h3>
+              <p className="text-sm text-slate-500">WhatsApp: <span className="text-white font-bold">{extInstSelected?.name}</span> · Todos os grupos</p>
+            </div>
+            <button onClick={syncGroups} disabled={syncingGroups || loadingGroups}
+              className="flex items-center gap-2 text-slate-400 hover:text-emerald-400 text-xs font-black uppercase transition-all disabled:opacity-40">
+              <RefreshCw size={13} className={syncingGroups ? 'animate-spin' : ''} />
+              {syncingGroups ? 'Sincronizando...' : 'Sincronizar'}
+            </button>
           </div>
           <div className="relative mb-4">
             <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
