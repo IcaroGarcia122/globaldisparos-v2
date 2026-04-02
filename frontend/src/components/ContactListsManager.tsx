@@ -19,9 +19,16 @@ interface Instance { id: string; name: string; phoneNumber?: string; status: str
 interface Group    { id: string; groupId?: string; name: string; participantsCount: number; }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-function authFetch(url: string) {
+function authFetch(path: string) {
   const token = localStorage.getItem('token');
-  return fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  // Usa a mesma base URL configurada no fetchAPI (/api)
+  const url = path.startsWith('/api') ? path : `/api${path}`;
+  return fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/octet-stream, text/csv, */*',
+    },
+  });
 }
 
 const ContactListsManager: React.FC = () => {
@@ -129,15 +136,13 @@ const ContactListsManager: React.FC = () => {
     const form = new FormData();
     form.append('file', file);
     try {
-      const res  = await authFetch(`/api/contacts/lists/${selectedList.id}/import-csv`);
-      // need POST
-      const res2 = await fetch(`/api/contacts/lists/${selectedList.id}/import-csv`, {
+      const res = await fetch(`/api/contacts/lists/${selectedList.id}/import-csv`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
         body: form,
       });
-      const data = await res2.json();
-      if (!res2.ok) throw new Error(data.error || 'Erro ao importar');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Erro ao importar');
       setSuccess(`${data.imported} contatos importados!`);
       fetchContacts(selectedList.id, 1);
       loadLists();

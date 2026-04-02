@@ -40,22 +40,8 @@ app.use(helmet({ contentSecurityPolicy: false }));
 // Cloudflare e Nginx enviam X-Forwarded-For — necessário para rate limiting correto
 app.set('trust proxy', 1);
 
-const allowedOrigins = [
-  process.env.FRONTEND_URL || 'http://localhost:5173',
-  'http://localhost:5173',
-  'http://localhost:3000',
-];
-// Aceita também www. prefixado
-if (process.env.FRONTEND_URL) {
-  const u = process.env.FRONTEND_URL;
-  if (!u.includes('www.')) allowedOrigins.push(u.replace('https://', 'https://www.'));
-}
 app.use(cors({
-  origin: (origin, cb) => {
-    if (!origin) return cb(null, true);
-    if (allowedOrigins.includes(origin)) return cb(null, true);
-    cb(new Error(`CORS: origin not allowed: ${origin}`));
-  },
+  origin: true, // Permite qualquer origem — segurança feita via JWT em cada rota
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 }));
