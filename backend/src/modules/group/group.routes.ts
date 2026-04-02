@@ -349,34 +349,37 @@ router.get('/export-xlsx/:instanceId/:groupId', authenticate, async (req: AuthRe
   const excludeAdmins = req.query.excludeAdmins === 'true';
 
   try {
-    const result = await getParticipants(instanceId, groupId);
-    const { participants, admins } = result;
+    // Usa APENAS o banco — nunca chama Evolution aqui (evita timeout de 3min que derruba a conexão)
+    const row = await prisma.whatsAppGroup.findFirst({
+      where: { instanceId, groupId },
+      select: { participantsList: true, participantsCount: true, name: true },
+    });
+
+    const cached = row?.participantsList as any;
+    const participants: string[] = cached?.participants || [];
+    const admins: string[]       = cached?.admins || [];
+
+    if (participants.length === 0) {
+      return res.status(404).json({
+        error: 'Participantes não sincronizados para este grupo. Vá em Gestão de Grupos → Sincronizar Participantes e tente novamente.',
+      });
+    }
 
     // Filtrar admins se solicitado
     const list = excludeAdmins
       ? participants.filter((p: string) => !admins.includes(p))
       : participants;
 
-    // Gerar XLSX manualmente (formato binário mínimo compatível com Excel)
-    // Usamos CSV com BOM UTF-8 que o Excel abre corretamente como "xlsx" alternativo
-    // Para XLSX real, gerar XML dentro de ZIP
     const rows = [['#', 'Telefone', 'Admin', 'Numero_Whatsapp']];
     list.forEach((phone: string, i: number) => {
       const isAdmin = admins.includes(phone) ? 'SIM' : 'NAO';
       rows.push([(i + 1).toString(), phone, isAdmin, `+${phone}`]);
     });
 
-    // CSV com BOM (Excel reconhece UTF-8)
     const bom = '\uFEFF';
     const csv = bom + rows.map(r => r.map(c => `"${c}"`).join(',')).join('\r\n');
 
-    // Buscar nome do grupo
-    const group = await prisma.whatsAppGroup.findFirst({
-      where: { groupId },
-      select: { name: true },
-    }).catch(() => null);
-
-    const groupName = (group?.name || groupId).replace(/[^a-zA-Z0-9_\-\u00C0-\u017F ]/g, '_').slice(0, 40);
+    const groupName = (row?.name || groupId).replace(/[^a-zA-Z0-9_\-\u00C0-\u017F ]/g, '_').slice(0, 40);
     const date = new Date().toISOString().split('T')[0];
     const filename = `contatos_${groupName}_${date}.csv`;
 

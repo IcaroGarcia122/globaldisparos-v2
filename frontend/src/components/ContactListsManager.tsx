@@ -68,7 +68,8 @@ const ContactListsManager: React.FC = () => {
   const [extSearch, setExtSearch]           = useState('');
   const [extracting, setExtracting]         = useState(false);
   const [extractOriginListId, setExtractOriginListId] = useState<number | null>(null);
-  const [syncingGroups, setSyncingGroups]   = useState(false);
+  const [syncingGroups, setSyncingGroups]         = useState(false);
+  const [syncingParticipants, setSyncingParticipants] = useState(false);
 
   // ── Load lists ───────────────────────────────────────────────────────────────
   const loadLists = async () => {
@@ -214,6 +215,16 @@ const ContactListsManager: React.FC = () => {
     await loadAllGroups(instId);
   };
 
+  const syncParticipants = async () => {
+    if (!extInstId) return;
+    setSyncingParticipants(true); setError('');
+    try {
+      await fetchAPI(`/groups/sync-participants/${extInstId}`, { method: 'POST' });
+      setSuccess('Sincronização de participantes iniciada em background. Aguarde ~1 min e tente baixar novamente.');
+    } catch { setError('Erro ao iniciar sync de participantes'); }
+    finally { setSyncingParticipants(false); }
+  };
+
   const selectExtGroup = (g: Group) => {
     setExtGroupId(g.groupId || g.id);
     setExtGroupName(g.name);
@@ -228,7 +239,11 @@ const ContactListsManager: React.FC = () => {
         const res = await authFetch(
           `/api/groups/export-xlsx/${extInstId}/${encodeURIComponent(extGroupId)}?excludeAdmins=${extFilterAdmin}`
         );
-        if (!res.ok) throw new Error('Erro ao gerar arquivo');
+        if (!res.ok) {
+          let msg = 'Erro ao gerar arquivo';
+          try { const d = await res.json(); msg = d.error || msg; } catch {}
+          throw new Error(msg);
+        }
         const blob = await res.blob();
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
@@ -448,6 +463,22 @@ const ContactListsManager: React.FC = () => {
                   placeholder="Nome da nova lista..."
                   className="w-full bg-[#0d1117] border border-white/10 rounded-xl px-4 py-3 text-white text-sm outline-none focus:border-blue-500 transition-all" />
               )}
+            </div>
+          )}
+
+          {/* Aviso participantes não sincronizados */}
+          {extGroupCount === 0 && (
+            <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 mb-4 flex items-start gap-3">
+              <AlertCircle size={16} className="text-amber-400 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="text-amber-400 text-xs font-black mb-1">Participantes não sincronizados</p>
+                <p className="text-slate-400 text-xs">Este grupo mostra 0 membros. Sincronize os participantes primeiro.</p>
+              </div>
+              <button onClick={syncParticipants} disabled={syncingParticipants}
+                className="flex items-center gap-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 px-3 py-2 rounded-lg font-black text-xs uppercase transition-all disabled:opacity-40 flex-shrink-0">
+                <RefreshCw size={11} className={syncingParticipants ? 'animate-spin' : ''} />
+                {syncingParticipants ? 'Iniciando...' : 'Sincronizar'}
+              </button>
             </div>
           )}
 
