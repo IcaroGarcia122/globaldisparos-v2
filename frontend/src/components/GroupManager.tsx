@@ -3,7 +3,7 @@ import { fetchAPI } from '@/config/api';
 import {
   Users, Upload, Loader2, AlertCircle, CheckCircle2, Clock,
   PlayCircle, PauseCircle, X, Search, ArrowLeft, ChevronRight,
-  RefreshCw, FileSpreadsheet, Shield
+  RefreshCw, FileSpreadsheet, Shield, Database,
 } from 'lucide-react';
 
 interface Instance { id: string; name: string; phoneNumber?: string; status: string; }
@@ -70,6 +70,11 @@ const GroupManager: React.FC = () => {
   const [delaySec, setDelaySec]   = useState(45);
   const [progress, setProgress]   = useState(0);
   const [countdown, setCountdown] = useState(0);
+
+  // ── From saved list ───────────────────────────────────────────────────────
+  const [sourceTab, setSourceTab]   = useState<'file' | 'list'>('file');
+  const [savedLists, setSavedLists] = useState<{ id: number; name: string; _count?: { contacts: number } }[]>([]);
+  const [loadingSavedLists, setLoadingSavedLists] = useState(false);
 
   const abortRef   = useRef(false);
   const pauseRef   = useRef(false);
@@ -207,7 +212,33 @@ const GroupManager: React.FC = () => {
     setQueue([]); setUploadedFile(null); setProgress(0); setSuccess(''); setError('');
   };
 
-  const goTo = (s: number) => { setError(''); setSuccess(''); setStep(s); };
+  const goTo = (s: number) => {
+    setError(''); setSuccess(''); setStep(s);
+    // Carrega listas salvas quando entra no step 3
+    if (s === 3 && savedLists.length === 0) {
+      setLoadingSavedLists(true);
+      fetchAPI('/contacts/lists')
+        .then(data => setSavedLists(Array.isArray(data) ? data : []))
+        .catch(() => {})
+        .finally(() => setLoadingSavedLists(false));
+    }
+  };
+
+  const loadFromSavedList = async (listId: number) => {
+    setError(''); setSuccess('');
+    try {
+      const data = await fetchAPI(`/contacts/lists/${listId}/contacts?limit=5000`);
+      const phones: string[] = (data.contacts || []).map((c: any) => c.phoneNumber as string);
+      if (phones.length === 0) { setError('Lista vazia.'); return; }
+      const items: QueueItem[] = phones.map(p => ({ phone: p, status: 'pending' }));
+      setQueue(items);
+      queueRef.current = items;
+      setUploadedFile(null);
+      setSuccess(`✅ ${phones.length} números carregados da lista.`);
+    } catch (e: any) {
+      setError(e.message || 'Erro ao carregar lista');
+    }
+  };
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   const selectedInst   = instances.find(i => i.id === instanceId);
@@ -404,7 +435,50 @@ const GroupManager: React.FC = () => {
               </div>
             </div>
 
+            {/* Source tab */}
+            <div className="flex gap-2 mb-5 p-1 bg-[#060b16] border border-white/5 rounded-xl">
+              <button onClick={() => setSourceTab('file')} disabled={isRunning}
+                className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg font-black text-xs uppercase transition-all ${sourceTab === 'file' ? 'bg-blue-500 text-white shadow' : 'text-slate-500 hover:text-white'}`}>
+                <FileSpreadsheet size={13} /> Arquivo
+              </button>
+              <button onClick={() => setSourceTab('list')} disabled={isRunning}
+                className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg font-black text-xs uppercase transition-all ${sourceTab === 'list' ? 'bg-blue-500 text-white shadow' : 'text-slate-500 hover:text-white'}`}>
+                <Database size={13} /> Lista Salva
+              </button>
+            </div>
+
             {/* Upload */}
+            {sourceTab === 'list' ? (
+              <div className="mb-5">
+                {loadingSavedLists ? (
+                  <div className="flex items-center justify-center py-8 gap-3 text-slate-400">
+                    <Loader2 size={18} className="animate-spin text-blue-500" /> Carregando listas...
+                  </div>
+                ) : savedLists.length === 0 ? (
+                  <div className="border-2 border-dashed border-white/10 rounded-xl p-8 text-center">
+                    <Database size={24} className="text-slate-600 mx-auto mb-2" />
+                    <p className="text-slate-500 text-sm font-bold">Nenhuma lista criada</p>
+                    <p className="text-slate-600 text-xs mt-1">Crie listas na seção "Listas de Contatos"</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                    <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest mb-2">Selecione uma lista:</p>
+                    {savedLists.map(l => (
+                      <button key={l.id} onClick={() => loadFromSavedList(l.id)} disabled={isRunning}
+                        className="w-full flex items-center justify-between p-3.5 rounded-xl border border-white/5 bg-white/3 hover:bg-blue-500/5 hover:border-blue-500/20 transition-all text-left disabled:opacity-40">
+                        <div className="flex items-center gap-3">
+                          <Database size={14} className="text-blue-400 flex-shrink-0" />
+                          <span className="text-white font-black text-sm">{l.name}</span>
+                        </div>
+                        <span className="text-slate-500 text-xs">{l._count?.contacts ?? 0} contatos</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {sourceTab === 'file' && (
             <label className="block mb-5 cursor-pointer">
               <div className={`border-2 border-dashed rounded-xl p-8 text-center transition-all ${
                 uploadedFile ? 'border-blue-500/50 bg-blue-500/5' : 'border-white/10 hover:border-blue-500/30 hover:bg-blue-500/3'
@@ -426,6 +500,7 @@ const GroupManager: React.FC = () => {
               </div>
               <input type="file" accept=".csv,.xlsx,.txt" onChange={handleFile} className="hidden" disabled={isRunning} />
             </label>
+            )}
 
             {/* Delay config */}
             {queue.length > 0 && (

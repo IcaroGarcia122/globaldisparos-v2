@@ -38,16 +38,25 @@ const CampaignMonitoring: React.FC<CampaignMonitoringProps> = ({ campaignId, onC
 
   // Polling para atualizar progresso
   useEffect(() => {
+    let stopped = false;
+    let interval: NodeJS.Timeout | null = null;
+
     const loadProgress = async () => {
       try {
         const data = await fetchAPI(`/campaigns/${campaignId}/progress`);
+        if (stopped) return;
         setProgress(data);
         setLoading(false);
         setError('');
         if (data.campaign?.message) {
           setNewMessage(data.campaign.message);
         }
+        // Para polling quando campanha finalizar
+        if (['completed', 'cancelled', 'failed'].includes(data?.status || data?.campaign?.status)) {
+          if (interval) { clearInterval(interval); interval = null; }
+        }
       } catch (err) {
+        if (stopped) return;
         console.error('Erro ao carregar progresso:', err);
         setError('Erro ao carregar progresso da campanha');
         setLoading(false);
@@ -58,9 +67,12 @@ const CampaignMonitoring: React.FC<CampaignMonitoringProps> = ({ campaignId, onC
     loadProgress();
 
     // Polling a cada 2 segundos
-    const interval = setInterval(loadProgress, 2000);
+    interval = setInterval(loadProgress, 2000);
 
-    return () => clearInterval(interval);
+    return () => {
+      stopped = true;
+      if (interval) clearInterval(interval);
+    };
   }, [campaignId]);
 
   const handlePauseCampaign = async () => {

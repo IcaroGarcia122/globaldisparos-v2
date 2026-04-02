@@ -381,11 +381,11 @@ class WhatsAppService {
   }
 
 
-  /** Retorna grupos onde a instância tem role de admin/superadmin */
+  /**
+   * Retorna grupos onde a instância tem role de admin ou superadmin.
+   * Tenta detectar via campo `participants` (se disponível) ou via campo `owner`.
+   */
   async getGroupsWhereAdmin(instanceName: string, ownerPhoneFromDb?: string): Promise<Array<{ groupId: string; name: string; participantsCount: number }>> {
-    // Evolution v2.3.6: getParticipants=true retorna 404
-    // Usar getParticipants=false (funciona) + filtrar pelo campo "owner" do grupo
-    // owner = criador do grupo, sempre é admin/superadmin
     try {
       const ownerPhone = (ownerPhoneFromDb || '').replace(/[^0-9]/g, '');
       if (!ownerPhone) {
@@ -393,37 +393,59 @@ class WhatsAppService {
         return [];
       }
 
+      const suffix = ownerPhone.slice(-8);
+
+      // Tentativa 1: fetchAllGroups com participants (pode funcionar em algumas versões)
+      try {
+        const res = await this.client.get(
+          `/group/fetchAllGroups/${instanceName}?getParticipants=true`,
+          { timeout: 60000 }
+        );
+        const raw = Array.isArray(res.data) ? res.data : (res.data?.groups || res.data?.value || []);
+        const withParticipants = raw.filter((g: any) =>
+          (g.id || g.jid || '').includes('@g.us') && Array.isArray(g.participants) && g.participants.length > 0
+        );
+
+        if (withParticipants.length > 0) {
+          const adminGroups: Array<{ groupId: string; name: string; participantsCount: number }> = [];
+          for (const g of withParticipants) {
+            const gid = g.id || g.jid;
+            // Checar se nosso número é admin ou superadmin na lista de participantes
+            const isAdmin = g.participants.some((p: any) => {
+              const jid: string = p.id || p.jid || p.phoneNumber || '';
+              const phone = jid.replace(/[^0-9]/g, '');
+              return phone.endsWith(suffix) && (p.admin === 'admin' || p.admin === 'superadmin');
+            });
+            if (isAdmin) {
+              adminGroups.push({ groupId: gid, name: g.subject || g.name || gid.slice(-12), participantsCount: g.size || g.participants.length });
+            }
+          }
+          if (adminGroups.length > 0) {
+            logger.info(`[AdminGroups] ${adminGroups.length} grupos com admin via participants`);
+            return adminGroups;
+          }
+        }
+      } catch { /* versão não suporta getParticipants=true */ }
+
+      // Tentativa 2: fetchAllGroups sem participants, filtra por owner
       const res = await this.client.get(
         `/group/fetchAllGroups/${instanceName}?getParticipants=false`,
         { timeout: 60000 }
       );
       const raw = Array.isArray(res.data) ? res.data : (res.data?.groups || res.data?.value || []);
       logger.info(`[AdminGroups] ${raw.length} grupos obtidos para "${instanceName}" (phone: ${ownerPhone})`);
-
       if (!raw.length) return [];
 
-      // Log diagnóstico na primeira chamada
       const first = raw.find((g: any) => (g.id || g.jid || '').includes('@g.us'));
       if (first) logger.info(`[AdminGroups] Campos disponíveis: ${Object.keys(first).join(', ')}`);
 
-      const suffix = ownerPhone.slice(-8); // últimos 8 dígitos para comparar
       const adminGroups: Array<{ groupId: string; name: string; participantsCount: number }> = [];
-
       for (const g of raw) {
         const gid: string = g.id || g.jid || '';
         if (!gid.includes('@g.us')) continue;
-
-        // Campo owner: "554299538607@s.whatsapp.net" ou "55429...@c.us"
         const ownerJid: string = (g.owner || g.ownerJid || '').replace(/[^0-9]/g, '');
-        const isOwner = ownerJid.endsWith(suffix);
-
-        // Criador = dono = sempre admin. Admins não-criadores não detectáveis sem participants.
-        if (isOwner) {
-          adminGroups.push({
-            groupId: gid,
-            name: g.subject || g.name || gid.slice(-12),
-            participantsCount: g.size || 0,
-          });
+        if (ownerJid.endsWith(suffix)) {
+          adminGroups.push({ groupId: gid, name: g.subject || g.name || gid.slice(-12), participantsCount: g.size || 0 });
         }
       }
 

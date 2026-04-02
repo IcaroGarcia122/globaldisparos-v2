@@ -17,20 +17,12 @@ const PaymentApproved: React.FC = () => {
   const [searchParams] = useSearchParams();
   const token    = searchParams.get('token');
   const planSlug = searchParams.get('plan') || 'mensal';
-  const ref      = searchParams.get('ref'); // chave secreta configurada no Diggion
+  const ref      = searchParams.get('ref');
   const navigate = useNavigate();
 
-  // Chave secreta esperada — deve bater com o que você configurou na URL de obrigado do Diggion
-  // Ex: /payment-approved?plan=mensal&ref=GD2026VENDA
-  const EXPECTED_REF = 'GD2026VENDA';
-
-  // Validação: precisa ter token OU ref correto
-  const hasValidRef = ref === EXPECTED_REF;
-  const needsValidation = !token && !hasValidRef;
-
-  const [validating, setValidating] = useState(!!token);
-  const [tokenValid, setTokenValid] = useState(!token && hasValidRef ? true : !token && !hasValidRef ? false : false);
-  const [tokenError, setTokenError] = useState(needsValidation ? 'Acesso não autorizado. Esta página só pode ser acessada após a compra.' : '');
+  const [validating, setValidating] = useState(!!(token || ref));
+  const [tokenValid, setTokenValid] = useState(false);
+  const [tokenError, setTokenError] = useState('');
   const [validPlan, setValidPlan]   = useState(planSlug);
 
   // Form
@@ -42,21 +34,41 @@ const PaymentApproved: React.FC = () => {
   const [error,        setError]         = useState('');
   const [loading,      setLoading]       = useState(false);
 
-  // Validar token ao carregar
+  // Validar acesso ao carregar — via token (link por email) ou via ref (redirect IronPay)
   useEffect(() => {
-    if (!token) return; // sem token = modo legado
-    fetchAPI(`/auth/validate-payment-token/${token}`)
-      .then(data => {
-        setTokenValid(true);
-        setValidPlan(data.plan || planSlug);
-        setValidating(false);
-      })
-      .catch(err => {
-        setTokenError(err?.message || 'Link inválido ou expirado.');
-        setTokenValid(false);
-        setValidating(false);
-      });
-  }, [token]);
+    if (token) {
+      // Fluxo token: link gerado pelo admin ou webhook
+      fetchAPI(`/auth/validate-payment-token/${token}`)
+        .then(data => {
+          setTokenValid(true);
+          setValidPlan(data.plan || planSlug);
+          setValidating(false);
+        })
+        .catch(err => {
+          setTokenError(err?.message || 'Link inválido ou expirado.');
+          setTokenValid(false);
+          setValidating(false);
+        });
+    } else if (ref) {
+      // Fluxo ref: redirect da IronPay — valida no servidor (ref nunca fica exposto no frontend)
+      fetchAPI('/auth/validate-payment-ref', { method: 'POST', body: { ref, plan: planSlug } })
+        .then(data => {
+          setTokenValid(true);
+          setValidPlan(data.plan || planSlug);
+          setValidating(false);
+        })
+        .catch(() => {
+          setTokenError('Acesso não autorizado. Esta página só pode ser acessada após a compra.');
+          setTokenValid(false);
+          setValidating(false);
+        });
+    } else {
+      // Sem token nem ref
+      setTokenError('Acesso não autorizado. Esta página só pode ser acessada após a compra.');
+      setTokenValid(false);
+      setValidating(false);
+    }
+  }, [token, ref]);
 
   const handleCreateAccount = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -98,25 +110,8 @@ const PaymentApproved: React.FC = () => {
     </div>
   );
 
-  // Sem autorização (nem token nem ref)
-  if (!token && !hasValidRef) return (
-    <div className="min-h-screen bg-[#0d1117] flex items-center justify-center p-4">
-      <div className="w-full max-w-sm text-center">
-        <div className="w-16 h-16 rounded-2xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400 mx-auto mb-5">
-          <AlertCircle size={28} />
-        </div>
-        <h1 className="text-2xl font-black text-white uppercase tracking-tighter mb-2">Acesso Restrito</h1>
-        <p className="text-slate-400 text-sm mb-2">Esta página só pode ser acessada após realizar uma compra.</p>
-        <p className="text-slate-500 text-xs mb-6">Se você acabou de comprar, use o link enviado por email.</p>
-        <button onClick={() => navigate('/auth')} className="text-brand-400 hover:text-brand-300 text-sm font-black uppercase tracking-widest transition-all">
-          Ir para o Login →
-        </button>
-      </div>
-    </div>
-  );
-
-  // Token inválido/expirado
-  if (token && !tokenValid) return (
+  // Acesso negado (ref ou token inválido)
+  if (!tokenValid) return (
     <div className="min-h-screen bg-[#0d1117] flex items-center justify-center p-4">
       <div className="w-full max-w-sm text-center">
         <div className="w-16 h-16 rounded-2xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400 mx-auto mb-5">

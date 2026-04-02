@@ -17,6 +17,7 @@ const ConnectWhatsApp: React.FC<ConnectWhatsAppProps> = ({ instanceId, onConnect
 
   const statusPollRef = useRef<NodeJS.Timeout | null>(null);
   const qrPollRef = useRef<NodeJS.Timeout | null>(null);
+  const callbackTimerRef = useRef<NodeJS.Timeout | null>(null);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -30,6 +31,7 @@ const ConnectWhatsApp: React.FC<ConnectWhatsAppProps> = ({ instanceId, onConnect
   const clearAll = () => {
     if (statusPollRef.current) { clearInterval(statusPollRef.current); statusPollRef.current = null; }
     if (qrPollRef.current) { clearInterval(qrPollRef.current); qrPollRef.current = null; }
+    if (callbackTimerRef.current) { clearTimeout(callbackTimerRef.current); callbackTimerRef.current = null; }
     removeQRListener();
     removeInstanceConnectedListener();
   };
@@ -46,7 +48,7 @@ const ConnectWhatsApp: React.FC<ConnectWhatsAppProps> = ({ instanceId, onConnect
           setConnected(true);
           setQrCode(null);
           clearAll();
-          if (onConnected) setTimeout(onConnected, 1500);
+          if (onConnected) { callbackTimerRef.current = setTimeout(onConnected, 1500); }
         }
       } catch { /* ignora */ }
     }, 3000);
@@ -65,7 +67,7 @@ const ConnectWhatsApp: React.FC<ConnectWhatsAppProps> = ({ instanceId, onConnect
           setConnected(true);
           setQrCode(null);
           clearAll();
-          if (onConnected) setTimeout(onConnected, 1500);
+          if (onConnected) { callbackTimerRef.current = setTimeout(onConnected, 1500); }
           return;
         }
         if (data?.qrCode) {
@@ -110,7 +112,7 @@ const ConnectWhatsApp: React.FC<ConnectWhatsAppProps> = ({ instanceId, onConnect
             setConnected(true);
             setQrCode(null);
             clearAll();
-            if (onConnected) setTimeout(onConnected, 1500);
+            if (onConnected) { callbackTimerRef.current = setTimeout(onConnected, 1500); }
           }
         });
       }
@@ -123,7 +125,7 @@ const ConnectWhatsApp: React.FC<ConnectWhatsAppProps> = ({ instanceId, onConnect
         setConnected(true);
         setLoading(false);
         clearAll();
-        if (onConnected) setTimeout(onConnected, 1500);
+        if (onConnected) { callbackTimerRef.current = setTimeout(onConnected, 1500); }
         return;
       }
 
