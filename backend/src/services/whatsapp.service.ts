@@ -437,19 +437,30 @@ class WhatsAppService {
       if (!raw.length) return [];
 
       const first = raw.find((g: any) => (g.id || g.jid || '').includes('@g.us'));
-      if (first) logger.info(`[AdminGroups] Campos disponíveis: ${Object.keys(first).join(', ')}`);
+      if (first) {
+        logger.info(`[AdminGroups] Campos disponíveis: ${Object.keys(first).join(', ')}`);
+        logger.info(`[AdminGroups] Amostra do primeiro grupo: ${JSON.stringify(first).slice(0, 300)}`);
+      }
 
       const adminGroups: Array<{ groupId: string; name: string; participantsCount: number }> = [];
       for (const g of raw) {
         const gid: string = g.id || g.jid || '';
         if (!gid.includes('@g.us')) continue;
-        const ownerJid: string = (g.owner || g.ownerJid || '').replace(/[^0-9]/g, '');
-        if (ownerJid.endsWith(suffix)) {
+
+        // Checa owner (criador do grupo)
+        const ownerJid: string = (g.owner || g.ownerJid || g.ownerNumber || '').replace(/[^0-9]/g, '');
+        const isOwner = ownerJid.length > 0 && ownerJid.endsWith(suffix);
+
+        // Checa se está na lista de admins do grupo (campo announce ou admins[])
+        const rawAdmins: string[] = g.admins || g.administrators || [];
+        const isAdminInList = rawAdmins.some((a: string) => a.replace(/[^0-9]/g, '').endsWith(suffix));
+
+        if (isOwner || isAdminInList) {
           adminGroups.push({ groupId: gid, name: g.subject || g.name || gid.slice(-12), participantsCount: g.size || 0 });
         }
       }
 
-      logger.info(`[AdminGroups] ${adminGroups.length} grupos onde ${ownerPhone} é owner/admin`);
+      logger.info(`[AdminGroups] ${adminGroups.length} grupos onde ${ownerPhone} é owner/admin (suffix=${suffix})`);
       return adminGroups;
     } catch (err: any) {
       logger.error(`[AdminGroups] Erro: ${err?.response?.status || err.message}`);
