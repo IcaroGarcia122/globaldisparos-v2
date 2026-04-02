@@ -15,6 +15,13 @@ router.get('/', authenticate, async (req: AuthRequest, res: Response) => {
   const { groups, source } = await getGroups(instanceId);
 
   if (groups.length > 0) {
+    // Retorna cache imediatamente, mas dispara sync em background para pegar grupos novos
+    const instance = await prisma.whatsAppInstance.findUnique({
+      where: { id: instanceId }, select: { status: true },
+    }).catch(() => null);
+    if (instance?.status === 'connected' && !isSyncing(instanceId)) {
+      syncGroupsBackground(instanceId).catch(() => {});
+    }
     return res.json({ groups, loading: false, total: groups.length, source });
   }
 

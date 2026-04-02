@@ -117,31 +117,28 @@ export async function syncGroupsBackground(instanceId: number, delayMs = 0): Pro
       await new Promise(r => setTimeout(r, delayMs));
     }
 
-    // Se já temos grupos no banco E a instância está conectada, apenas limpar cache
-    const existing = await prisma.whatsAppGroup.count({ where: { instanceId } });
     const inst = await prisma.whatsAppInstance.findUnique({ where: { id: instanceId }, select: { status: true } });
-    if (existing > 0 && inst?.status !== 'connected') {
-      // Instância desconectada com grupos no banco — retornar cache sem tentar Evolution
-      logger.info(`[Groups] ${existing} grupos no banco (instância offline) — usando cache para ${instName}`);
+
+    if (inst?.status !== 'connected') {
+      // Instância offline — retorna o que tem no banco sem chamar Evolution
+      logger.info(`[Groups] Instância ${instName} offline — usando banco sem sync`);
       await cache.del(`groups:${instanceId}`);
       return;
     }
-    if (existing > 0 && inst?.status === 'connected') {
-      // Instância conectada com grupos — verificar se precisa re-sync
-      logger.info(`[Groups] ${existing} grupos no banco para ${instName} — invalidando cache`);
-      await cache.del(`groups:${instanceId}`);
-      // Continuar para tentar atualizar via Evolution
-    }
 
-    // Estratégia: findChats → JIDs dos grupos → findGroupInfos por lote
-    syncProgress.set(key, 'extraindo grupos via findChats...');
-    logger.info(`[Groups] Iniciando sync via findChats+findGroupInfos para ${instName}`);
+    // Instância conectada — sempre busca da Evolution para pegar grupos novos
+    await cache.del(`groups:${instanceId}`);
+    syncProgress.set(key, 'buscando grupos na Evolution...');
+    logger.info(`[Groups] Sync via Evolution para ${instName}`);
 
     const raw = await whatsappService.fetchGroups(instName);
     if (raw.length > 0) {
       syncProgress.set(key, `salvando ${raw.length} grupos...`);
       const saved = await saveGroupsFromWebhook(instanceId, raw);
+      // Limpa cache imediatamente para próxima request ver grupos novos
+      await cache.del(`groups:${instanceId}`);
       logger.info(`[Groups] ✅ ${saved} grupos salvos para ${instName}`);
+      // Enriquece nomes em background (não bloqueia)
       whatsappService.enrichGroupNamesViaMessages(instName, instanceId, prisma)
         .then(async () => {
           await cache.del(`groups:${instanceId}`);
@@ -152,16 +149,15 @@ export async function syncGroupsBackground(instanceId: number, delayMs = 0): Pro
       return;
     }
 
-    // Evolution sem grupos (sessão perdida ou offline)
-    // Verificar se temos grupos no banco de uma sessão anterior
-    const cached = await prisma.whatsAppGroup.count({ where: { instanceId } });
-    if (cached > 0) {
-      logger.info(`[Groups] Evolution sem dados — usando ${cached} grupos em cache do banco para ${instName}`);
+    // Evolution não retornou grupos — usar banco (pode ter grupos de sessão anterior)
+    const existing = await prisma.whatsAppGroup.count({ where: { instanceId } });
+    if (existing > 0) {
+      logger.info(`[Groups] Evolution sem dados — usando ${existing} grupos do banco para ${instName}`);
       await cache.del(`groups:${instanceId}`);
       return;
     }
 
-    logger.warn(`[Groups] Nenhum grupo — Evolution offline e banco vazio para ${instName}. Reconecte o WhatsApp.`);
+    logger.warn(`[Groups] Nenhum grupo — Evolution sem dados e banco vazio para ${instName}`);
 
   } catch (err: any) {
     logger.error(`[Groups] Sync erro: ${err.message}`);

@@ -113,11 +113,14 @@ router.post('/evolution/:event?', async (req: Request, res: Response) => {
         const payload = { instanceId: instance.id, instanceName, phoneNumber, status: 'connected' };
         emitToUser(instance.userId, 'whatsapp_connected', payload);
 
-        // Dispara sync de grupos 45s após conectar (WhatsApp precisa sincronizar primeiro)
+        // Dispara sync imediato (5s) + segundo sync após 60s para pegar grupos que demoram
         setTimeout(() => {
           syncGroupsBackground(instance.id).catch(() => {});
-        }, 45000);
-        logger.info(`[Webhook] Sync de grupos agendado em 45s para ${instanceName}`);
+        }, 5000);
+        setTimeout(() => {
+          syncGroupsBackground(instance.id).catch(() => {});
+        }, 60000);
+        logger.info(`[Webhook] Sync de grupos agendado em 5s e 60s para ${instanceName}`);
 
       } else if (state === 'close') {
         if (instance.status === 'connected') {
