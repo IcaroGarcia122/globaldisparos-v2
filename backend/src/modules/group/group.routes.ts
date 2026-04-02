@@ -1,6 +1,6 @@
 import { Router, Response, Request } from 'express';
 import { authenticate, AuthRequest } from '../../middlewares/auth.middleware';
-import { getGroups, syncGroupsBackground, saveGroupsFromWebhook, getParticipants, isSyncing, getSyncProgress } from '../../services/groups.service';
+import { getGroups, syncGroupsBackground, saveGroupsFromWebhook, getParticipants, isSyncing, getSyncProgress, syncAllParticipants } from '../../services/groups.service';
 import whatsappService from '../../services/whatsapp.service';
 import prisma from '../../config/database';
 import logger from '../../utils/logger';
@@ -100,7 +100,7 @@ router.get('/participants/:instanceId/:groupId', authenticate, async (req: AuthR
   }
 });
 
-/** GET /api/groups/admin-only/:instanceId — todos os grupos da instância */
+/** GET /api/groups/admin-only/:instanceId — grupos onde a instância é admin/dono */
 router.get('/admin-only/:instanceId', authenticate, async (req: AuthRequest, res: Response) => {
   const instanceId = parseInt(req.params.instanceId);
   try {
@@ -109,48 +109,74 @@ router.get('/admin-only/:instanceId', authenticate, async (req: AuthRequest, res
       select: { name: true, phoneNumber: true, status: true },
     });
     const instanceName = instance?.name || `instance_${instanceId}`;
-    logger.info(`[AdminGroups] instanceId=${instanceId} instanceName="${instanceName}" status="${instance?.status}"`);
+    const ownerPhone = (instance?.phoneNumber || '').replace(/\D/g, '');
+    const suffix = ownerPhone.slice(-8);
+    logger.info(`[AdminGroups] instanceId=${instanceId} phone="${ownerPhone}" status="${instance?.status}"`);
 
-    // ── 1. Banco de dados (rápido, sempre atualizado pelo sync) ───────────────
-    const dbGroups = await prisma.whatsAppGroup.findMany({
+    // Busca todos os grupos com participantsList
+    const allGroups = await prisma.whatsAppGroup.findMany({
       where: { instanceId },
       orderBy: { name: 'asc' },
-      select: { groupId: true, name: true, participantsCount: true },
+      select: { groupId: true, name: true, participantsCount: true, participantsList: true },
     });
 
-    if (dbGroups.length > 0) {
-      logger.info(`[AdminGroups] ${dbGroups.length} grupos do banco para ${instanceName}`);
-      // Dispara sync em background para pegar grupos novos na próxima requisição
-      if (instance?.status === 'connected' && !isSyncing(instanceId)) {
-        syncGroupsBackground(instanceId).catch(() => {});
+    // Se banco vazio, busca da Evolution e dispara sync completo
+    if (allGroups.length === 0) {
+      if (instance?.status !== 'connected') {
+        return res.status(404).json({ error: 'Instância não conectada e nenhum grupo no banco.' });
       }
+      syncGroupsBackground(instanceId).catch(() => {});
+      return res.status(404).json({ error: 'Nenhum grupo encontrado. Aguarde alguns segundos e recarregue.' });
+    }
+
+    // Dispara sync em background para manter atualizado
+    if (instance?.status === 'connected' && !isSyncing(instanceId)) {
+      syncGroupsBackground(instanceId).catch(() => {});
+    }
+
+    // Quantos grupos têm participantsList populado?
+    const withParticipants = allGroups.filter(g => {
+      const pl = g.participantsList as any;
+      return pl?.participants?.length > 0;
+    });
+
+    logger.info(`[AdminGroups] ${allGroups.length} grupos, ${withParticipants.length} com participantes sincronizados`);
+
+    // Se pelo menos 50% dos grupos têm participantes → filtra por admin
+    if (withParticipants.length > 0 && withParticipants.length >= allGroups.length * 0.5) {
+      const adminGroups = allGroups.filter(g => {
+        const pl = g.participantsList as any;
+        if (!pl) return false;
+        const admins: string[] = pl.admins || [];
+        return admins.some((a: string) => a.replace(/\D/g, '').endsWith(suffix));
+      });
+
+      if (adminGroups.length > 0) {
+        logger.info(`[AdminGroups] ${adminGroups.length} grupos onde ${ownerPhone} é admin`);
+        return res.json({
+          groups: adminGroups.map(g => ({ groupId: g.groupId, name: g.name, participantsCount: g.participantsCount })),
+          source: 'database_admins',
+        });
+      }
+    }
+
+    // Participantes ainda não sincronizados — dispara sync e retorna todos com aviso
+    if (withParticipants.length < allGroups.length * 0.5) {
+      syncAllParticipants(instanceId, instanceName).catch(() => {});
+      logger.warn(`[AdminGroups] Participantes não sincronizados ainda — retornando todos os ${allGroups.length} grupos`);
       return res.json({
-        groups: dbGroups.map(g => ({ groupId: g.groupId, name: g.name, participantsCount: g.participantsCount })),
-        source: 'database',
+        groups: allGroups.map(g => ({ groupId: g.groupId, name: g.name, participantsCount: g.participantsCount })),
+        source: 'database_all',
+        warning: 'Sincronizando dados de admin em background. Recarregue em 30 segundos para ver apenas seus grupos.',
       });
     }
 
-    // ── 2. Banco vazio — busca direto na Evolution ─────────────────────────────
-    if (instance?.status !== 'connected') {
-      return res.status(404).json({ error: 'Instância não conectada e nenhum grupo no banco.' });
-    }
-
-    logger.info(`[AdminGroups] Banco vazio — buscando da Evolution para ${instanceName}`);
-    syncGroupsBackground(instanceId).catch(() => {});
-
-    const raw = await whatsappService.fetchGroups(instanceName).catch(() => []);
-    if (raw.length > 0) {
-      await saveGroupsFromWebhook(instanceId, raw).catch(() => {});
-      const groups = raw.map((g: any) => ({
-        groupId: g.id || g.jid,
-        name: g.subject || g.name || (g.id || '').slice(-12),
-        participantsCount: g.size || 0,
-      }));
-      logger.info(`[AdminGroups] ${groups.length} grupos da Evolution para ${instanceName}`);
-      return res.json({ groups, source: 'evolution' });
-    }
-
-    return res.status(404).json({ error: 'Nenhum grupo encontrado. Aguarde alguns segundos e recarregue (sincronização em andamento).' });
+    // Participantes sincronizados mas número não está como admin em nenhum grupo
+    return res.json({
+      groups: allGroups.map(g => ({ groupId: g.groupId, name: g.name, participantsCount: g.participantsCount })),
+      source: 'database_all',
+      warning: 'Número não encontrado como admin em nenhum grupo.',
+    });
   } catch (err: any) {
     logger.error(`[AdminGroups] Erro: ${err.message}`);
     return res.status(500).json({ error: err.message });

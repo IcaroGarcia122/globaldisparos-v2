@@ -6,6 +6,7 @@ import logger from '../utils/logger';
 const CACHE_TTL = 5 * 60; // 5 min
 const syncRunning = new Set<string>();
 const syncProgress = new Map<string, string>();
+const participantSyncRunning = new Set<string>();
 
 // ─── SALVAR GRUPOS (chamado pelo webhook GROUPS_UPSERT) ───────────────────────
 export async function saveGroupsFromWebhook(instanceId: number, rawGroups: any[]): Promise<number> {
@@ -135,10 +136,11 @@ export async function syncGroupsBackground(instanceId: number, delayMs = 0): Pro
     if (raw.length > 0) {
       syncProgress.set(key, `salvando ${raw.length} grupos...`);
       const saved = await saveGroupsFromWebhook(instanceId, raw);
-      // Limpa cache imediatamente para próxima request ver grupos novos
       await cache.del(`groups:${instanceId}`);
       logger.info(`[Groups] ✅ ${saved} grupos salvos para ${instName}`);
-      // Enriquece nomes em background (não bloqueia)
+      // Sync participantes em background para popular admins
+      syncAllParticipants(instanceId, instName).catch(() => {});
+      // Enriquece nomes em background
       whatsappService.enrichGroupNamesViaMessages(instName, instanceId, prisma)
         .then(async () => {
           await cache.del(`groups:${instanceId}`);
@@ -164,6 +166,58 @@ export async function syncGroupsBackground(instanceId: number, delayMs = 0): Pro
   } finally {
     syncRunning.delete(key);
     syncProgress.delete(key);
+  }
+}
+
+/**
+ * Sincroniza participantes de todos os grupos da instância.
+ * Chamado automaticamente após sync de grupos para popular participantsList.admins.
+ */
+export async function syncAllParticipants(instanceId: number, instanceName: string): Promise<void> {
+  const key = String(instanceId);
+  if (participantSyncRunning.has(key)) return;
+  participantSyncRunning.add(key);
+
+  try {
+    const groups = await prisma.whatsAppGroup.findMany({
+      where: { instanceId },
+      select: { groupId: true },
+    });
+    if (!groups.length) return;
+
+    logger.info(`[Groups] Sync participantes: ${groups.length} grupos para ${instanceName}`);
+    let synced = 0;
+
+    for (const g of groups) {
+      try {
+        const raw = await whatsappService.getGroupParticipants(instanceName, g.groupId);
+        if (!raw.length) continue;
+
+        const participants: string[] = [];
+        const admins: string[] = [];
+        for (const p of raw) {
+          const jid: string = p.id || p.jid || p.phoneNumber || '';
+          const phone = jid.replace('@s.whatsapp.net', '').replace('@c.us', '').replace(/\D/g, '');
+          if (!phone || phone.length < 8) continue;
+          participants.push(phone);
+          if (p.admin === 'admin' || p.admin === 'superadmin' || p.isAdmin) admins.push(phone);
+        }
+        if (!participants.length) continue;
+
+        await prisma.whatsAppGroup.updateMany({
+          where: { instanceId, groupId: g.groupId },
+          data: { participantsList: { participants, admins } as any, participantsCount: participants.length, participantsSyncedAt: new Date() },
+        });
+        synced++;
+      } catch { /* grupo falhou, continua */ }
+
+      await new Promise(r => setTimeout(r, 300)); // delay entre grupos
+    }
+    logger.info(`[Groups] ✅ Sync participantes concluído: ${synced}/${groups.length} para ${instanceName}`);
+  } catch (err: any) {
+    logger.warn(`[Groups] Sync participantes erro: ${err.message}`);
+  } finally {
+    participantSyncRunning.delete(key);
   }
 }
 
