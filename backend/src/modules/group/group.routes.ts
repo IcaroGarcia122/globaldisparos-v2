@@ -111,107 +111,48 @@ router.get('/admin-only/:instanceId', authenticate, async (req: AuthRequest, res
     const instanceName = instance?.name || `instance_${instanceId}`;
     const ownerPhone = (instance?.phoneNumber || '').replace(/\D/g, '');
     const suffix = ownerPhone.slice(-8);
-    logger.info(`[AdminGroups] instanceId=${instanceId} phone="${ownerPhone}" instanceName="${instanceName}"`);
 
-    if (!ownerPhone) {
-      return res.status(400).json({ error: 'Número da instância não encontrado. Reconecte o WhatsApp.' });
-    }
-
-    // ── Busca direto da Evolution com participantes ────────────────────────────
-    const baseURL = (process.env.EVOLUTION_API_URL || 'http://127.0.0.1:8081').replace('localhost', '127.0.0.1');
-    const apiKey  = process.env.EVOLUTION_API_KEY || '';
-
-    let adminGroups: { groupId: string; name: string; participantsCount: number }[] = [];
-
-    try {
-      const axios = (await import('axios')).default;
-      const res2 = await axios.get(
-        `${baseURL}/group/fetchAllGroups/${instanceName}?getParticipants=true`,
-        { headers: { apikey: apiKey }, timeout: 90000 }
-      );
-      const raw = Array.isArray(res2.data) ? res2.data : (res2.data?.groups || res2.data?.value || []);
-      logger.info(`[AdminGroups] Evolution retornou ${raw.length} grupos`);
-
-      for (const g of raw) {
-        const gid: string = g.id || g.jid || '';
-        if (!gid.includes('@g.us')) continue;
-
-        // Checa pelo campo owner (criador)
-        const ownerJid = (g.owner || g.ownerJid || '').replace(/\D/g, '');
-        const isOwner = ownerJid.length > 0 && ownerJid.endsWith(suffix);
-
-        // Checa se está na lista de participantes como admin
-        let isAdmin = false;
-        if (Array.isArray(g.participants)) {
-          isAdmin = g.participants.some((p: any) => {
-            const pJid = (p.id || p.jid || p.phoneNumber || '').replace(/\D/g, '');
-            return pJid.endsWith(suffix) && (p.admin === 'admin' || p.admin === 'superadmin');
-          });
-
-          // Salva participantes no banco em background
-          const participants: string[] = [];
-          const admins: string[] = [];
-          for (const p of g.participants) {
-            const jid: string = p.id || p.jid || p.phoneNumber || '';
-            const phone = jid.replace('@s.whatsapp.net', '').replace('@c.us', '').replace(/\D/g, '');
-            if (!phone || phone.length < 8) continue;
-            participants.push(phone);
-            if (p.admin === 'admin' || p.admin === 'superadmin') admins.push(phone);
-          }
-          if (participants.length > 0) {
-            prisma.whatsAppGroup.updateMany({
-              where: { instanceId, groupId: gid },
-              data: { participantsList: { participants, admins } as any, participantsCount: participants.length, participantsSyncedAt: new Date() },
-            }).catch(() => {});
-          }
-        }
-
-        if (isOwner || isAdmin) {
-          adminGroups.push({ groupId: gid, name: g.subject || g.name || gid.slice(-12), participantsCount: g.size || g.participants?.length || 0 });
-        }
-      }
-
-      logger.info(`[AdminGroups] ${adminGroups.length} grupos onde ${ownerPhone} é admin/dono`);
-
-      if (adminGroups.length > 0) {
-        return res.json({ groups: adminGroups, source: 'evolution' });
-      }
-    } catch (evErr: any) {
-      logger.warn(`[AdminGroups] Evolution falhou (${evErr.message}) — usando banco`);
-    }
-
-    // ── Fallback: banco de dados (participantsList já populado) ───────────────
+    // ── Sempre responde do banco (rápido) ─────────────────────────────────────
     const dbGroups = await prisma.whatsAppGroup.findMany({
       where: { instanceId },
       orderBy: { name: 'asc' },
       select: { groupId: true, name: true, participantsCount: true, participantsList: true },
     });
 
+    // Banco vazio → dispara sync e retorna vazio
     if (dbGroups.length === 0) {
-      syncGroupsBackground(instanceId).catch(() => {});
-      return res.json({ groups: [], warning: 'Nenhum grupo no banco. Sincronização iniciada — recarregue em 30 segundos.' });
+      if (instance?.status === 'connected') syncGroupsBackground(instanceId).catch(() => {});
+      return res.json({ groups: [], warning: 'Sincronização iniciada. Recarregue em 30 segundos.' });
     }
 
-    const adminFromDb = dbGroups.filter(g => {
-      const pl = g.participantsList as any;
-      if (!pl?.admins?.length) return false;
-      return pl.admins.some((a: string) => a.replace(/\D/g, '').endsWith(suffix));
-    });
+    // Dispara sync de participantes em background (não bloqueia resposta)
+    if (instance?.status === 'connected') {
+      syncAllParticipants(instanceId, instanceName).catch(() => {});
+    }
 
-    if (adminFromDb.length > 0) {
-      logger.info(`[AdminGroups] ${adminFromDb.length} grupos admin via banco`);
-      return res.json({
-        groups: adminFromDb.map(g => ({ groupId: g.groupId, name: g.name, participantsCount: g.participantsCount })),
-        source: 'database_admins',
+    // Filtra por admin se tiver dados
+    if (ownerPhone) {
+      const adminGroups = dbGroups.filter(g => {
+        const pl = g.participantsList as any;
+        if (!pl?.admins?.length) return false;
+        return pl.admins.some((a: string) => a.replace(/\D/g, '').endsWith(suffix));
       });
+
+      if (adminGroups.length > 0) {
+        logger.info(`[AdminGroups] ${adminGroups.length}/${dbGroups.length} grupos onde ${ownerPhone} é admin`);
+        return res.json({
+          groups: adminGroups.map(g => ({ groupId: g.groupId, name: g.name, participantsCount: g.participantsCount })),
+          source: 'database_admins',
+        });
+      }
     }
 
-    // Banco sem dados de admin — retorna todos e dispara sync
-    syncAllParticipants(instanceId, instanceName).catch(() => {});
+    // Sem dados de admin ainda — retorna todos com aviso
+    logger.info(`[AdminGroups] Sem dados de admin ainda — retornando ${dbGroups.length} grupos`);
     return res.json({
       groups: dbGroups.map(g => ({ groupId: g.groupId, name: g.name, participantsCount: g.participantsCount })),
       source: 'database_all',
-      warning: 'Sincronizando dados de admin. Recarregue em 30 segundos para filtrar apenas seus grupos.',
+      warning: 'Sincronizando dados de admin em background. Recarregue em 30 segundos.',
     });
   } catch (err: any) {
     logger.error(`[AdminGroups] Erro: ${err.message}`);
