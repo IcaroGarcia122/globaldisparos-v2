@@ -78,6 +78,23 @@ router.post('/:id/connect', async (req, res) => {
         const evName = instance.name || instanceName(id);
         const webhookUrl = process.env.WEBHOOK_URL || 'http://host.docker.internal:3001/api/webhook/evolution';
         const WEBHOOK_EVENTS = ['QRCODE_UPDATED', 'CONNECTION_UPDATE', 'GROUPS_UPSERT', 'GROUP_UPDATE'];
+        // 0. Bloquear se outro connect já em andamento para este usuário
+        const alreadyConnecting = await database_1.default.whatsAppInstance.findFirst({
+            where: { userId: instance.userId, status: 'connecting', isActive: true, id: { not: id } },
+        });
+        if (alreadyConnecting) {
+            return res.status(429).json({
+                error: `Aguarde — "${alreadyConnecting.name}" já está conectando. Finalize antes de conectar outra.`,
+                instanceConnecting: alreadyConnecting.name,
+            });
+        }
+        // 0b. Limitar tentativas de QR (máx 3 por instância em 5 minutos)
+        // Evita bloqueio do WhatsApp por excesso de tentativas
+        const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+        if (instance.updatedAt > fiveMinutesAgo && instance.status === 'connecting') {
+            // Já tentou recentemente — deixar passar mas logar
+            logger_1.default.warn(`[Instance] ${evName} — múltiplas tentativas de QR em 5min`);
+        }
         // 1. Verifica se já existe e está conectada na Evolution
         try {
             const state = await whatsapp_service_1.default.getInstanceState(evName);
@@ -88,16 +105,30 @@ router.post('/:id/connect', async (req, res) => {
             }
         }
         catch { /* ainda não existe na Evolution */ }
-        // 2. Cria instância na Evolution (ignora 400/409 = já existe)
+        // 2. Cria instância na Evolution
+        // Se já existe (403/409), deleta e recria para garantir sessão limpa e QR válido
         let createData = null;
         try {
             createData = await whatsapp_service_1.default.createInstance(evName);
             logger_1.default.info(`[Instance] ${evName} criada na Evolution`);
         }
         catch (err) {
+            const status = err.response?.status || 0;
             const msg = err.message || '';
-            if (msg.includes('400') || msg.includes('409') || msg.includes('403') || msg.includes('already')) {
-                logger_1.default.info(`[Instance] ${evName} já existe na Evolution`);
+            if (status === 403 || status === 409 || msg.includes('already')) {
+                // Instância existe mas pode estar com sessão corrompida — deletar e recriar
+                logger_1.default.info(`[Instance] ${evName} já existe na Evolution — deletando e recriando para sessão limpa`);
+                try {
+                    await whatsapp_service_1.default.logoutInstance(evName).catch(() => { });
+                    await new Promise(r => setTimeout(r, 1000));
+                    await whatsapp_service_1.default.deleteInstance(evName);
+                    await new Promise(r => setTimeout(r, 2000));
+                    createData = await whatsapp_service_1.default.createInstance(evName);
+                    logger_1.default.info(`[Instance] ${evName} recriada na Evolution com sucesso`);
+                }
+                catch (err2) {
+                    logger_1.default.warn(`[Instance] Falha ao recriar ${evName}: ${err2.message}`);
+                }
             }
             else {
                 logger_1.default.warn(`[Instance] Criação na Evolution: ${err.message}`);

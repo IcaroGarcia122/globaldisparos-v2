@@ -153,7 +153,7 @@ async function restoreActiveWarmups() {
       SELECT ws.*, wi.phone_number, wi.name as instance_name, wi.user_id
       FROM warmup_states ws
       JOIN whatsapp_instances wi ON wi.id = ws.instance_id
-      WHERE ws.running = true
+      WHERE ws.running = true AND wi.is_active = true AND wi.status != 'disconnected'
     `.catch(() => []);
         for (const row of rows) {
             const key = String(row.instance_id);

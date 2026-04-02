@@ -5,6 +5,32 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const axios_1 = __importDefault(require("axios"));
 const logger_1 = __importDefault(require("../utils/logger"));
+// ─── Fila de requisições para não sobrecarregar a Evolution ──────────────────
+// Máximo 2 requisições simultâneas, com retry automático em caso de timeout
+class EvolutionQueue {
+    constructor() {
+        this.running = 0;
+        this.maxConcurrent = 2;
+        this.queue = [];
+    }
+    async run(fn) {
+        // Aguarda slot disponível
+        if (this.running >= this.maxConcurrent) {
+            await new Promise(resolve => this.queue.push(resolve));
+        }
+        this.running++;
+        try {
+            return await fn();
+        }
+        finally {
+            this.running--;
+            const next = this.queue.shift();
+            if (next)
+                next();
+        }
+    }
+}
+const evolutionQueue = new EvolutionQueue();
 class WhatsAppService {
     constructor() {
         const baseURL = (process.env.EVOLUTION_API_URL || 'http://127.0.0.1:8081')
@@ -25,7 +51,7 @@ class WhatsAppService {
     }
     // ─── INSTÂNCIAS ──────────────────────────────────────────────────────────────
     async fetchInstances() {
-        const res = await this.client.get('/instance/fetchInstances');
+        const res = await evolutionQueue.run(() => this.client.get('/instance/fetchInstances'));
         const list = Array.isArray(res.data) ? res.data : (res.data?.value || []);
         return list.map((item) => {
             // Evolution API v2: dados diretos no item, sem wrapper instance
@@ -46,7 +72,7 @@ class WhatsAppService {
         const webhookUrl = process.env.WEBHOOK_URL || 'http://host.docker.internal:3001/api/webhook/evolution';
         const events = ['QRCODE_UPDATED', 'CONNECTION_UPDATE', 'GROUPS_UPSERT', 'GROUP_UPDATE', 'GROUP_PARTICIPANTS_UPDATE', 'MESSAGES_UPSERT'];
         // v2.3.6: webhook no create + QR retorna direto no qrcode.base64
-        const res = await this.client.post('/instance/create', {
+        const res = await evolutionQueue.run(() => this.client.post('/instance/create', {
             instanceName: name,
             qrcode: true,
             integration: 'WHATSAPP-BAILEYS',
@@ -62,11 +88,11 @@ class WhatsAppService {
                 base64: false,
                 events,
             },
-        }, { timeout: 90000 });
+        }, { timeout: 90000 }));
         return res.data;
     }
     async connectInstance(name) {
-        const res = await this.client.get(`/instance/connect/${name}`);
+        const res = await evolutionQueue.run(() => this.client.get(`/instance/connect/${name}`));
         return res.data;
     }
     async getInstanceState(name) {

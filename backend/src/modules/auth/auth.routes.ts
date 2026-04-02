@@ -120,9 +120,11 @@ router.delete('/admin/users/:id', authenticate, async (req: AuthRequest, res: Re
   const userId = parseInt(req.params.id);
   try {
     // Remover FKs antes de deletar usuário
-    await prisma.$executeRaw`DELETE FROM invite_tokens WHERE used_by = ${userId} OR created_by = ${userId}`.catch(() => {});
-    await prisma.whatsAppInstance.deleteMany({ where: { userId } }).catch(() => {});
+    // Limpar FKs em ordem correta antes de deletar usuário
+    await prisma.$executeRaw`UPDATE invite_tokens SET used_by = NULL WHERE used_by = ${userId}`.catch(() => {});
+    await prisma.$executeRaw`DELETE FROM invite_tokens WHERE created_by = ${userId}`.catch(() => {});
     await prisma.campaign.deleteMany({ where: { userId } }).catch(() => {});
+    await prisma.whatsAppInstance.updateMany({ where: { userId }, data: { isActive: false, status: 'disconnected' } }).catch(() => {});
     await prisma.user.delete({ where: { id: userId } });
     return res.json({ ok: true });
   } catch (err: any) {

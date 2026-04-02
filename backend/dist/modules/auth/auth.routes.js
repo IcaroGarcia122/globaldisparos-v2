@@ -151,9 +151,11 @@ router.delete('/admin/users/:id', auth_middleware_1.authenticate, async (req, re
     const userId = parseInt(req.params.id);
     try {
         // Remover FKs antes de deletar usuário
-        await database_1.default.$executeRaw `DELETE FROM invite_tokens WHERE used_by = ${userId} OR created_by = ${userId}`.catch(() => { });
-        await database_1.default.whatsAppInstance.deleteMany({ where: { userId } }).catch(() => { });
+        // Limpar FKs em ordem correta antes de deletar usuário
+        await database_1.default.$executeRaw `UPDATE invite_tokens SET used_by = NULL WHERE used_by = ${userId}`.catch(() => { });
+        await database_1.default.$executeRaw `DELETE FROM invite_tokens WHERE created_by = ${userId}`.catch(() => { });
         await database_1.default.campaign.deleteMany({ where: { userId } }).catch(() => { });
+        await database_1.default.whatsAppInstance.updateMany({ where: { userId }, data: { isActive: false, status: 'disconnected' } }).catch(() => { });
         await database_1.default.user.delete({ where: { id: userId } });
         return res.json({ ok: true });
     }

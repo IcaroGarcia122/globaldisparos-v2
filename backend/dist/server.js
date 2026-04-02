@@ -242,6 +242,103 @@ async function start() {
         }
         catch { /* ignora */ }
     });
+    // A cada 5min: resetar instâncias presas em 'connecting' + matar warmup zumbi
+    node_cron_1.default.schedule('*/5 * * * *', async () => {
+        try {
+            // 1. Resetar instâncias presas em connecting por mais de 10min
+            const cutoff = new Date(Date.now() - 10 * 60 * 1000);
+            const stuck = await database_2.default.whatsAppInstance.updateMany({
+                where: { status: 'connecting', isActive: true, updatedAt: { lt: cutoff } },
+                data: { status: 'disconnected', qrCode: null },
+            });
+            if (stuck.count > 0)
+                logger_1.default.warn(`[Cron] ${stuck.count} instância(s) presa(s) em connecting → disconnected`);
+            // 2. Matar warmups de instâncias inativas no banco
+            await database_2.default.$executeRaw `
+        UPDATE warmup_states SET running = false
+        WHERE instance_id IN (
+          SELECT id FROM whatsapp_instances WHERE is_active = false
+        )
+      `.catch(() => { });
+            // 3. Sincronizar status: busca instâncias que o banco diz connected mas Evolution diz close
+            const dbConnected = await database_2.default.whatsAppInstance.findMany({
+                where: { status: 'connected', isActive: true },
+                select: { id: true, name: true, userId: true, phoneNumber: true }
+            });
+            if (dbConnected.length > 0) {
+                const wha = (await Promise.resolve().then(() => __importStar(require('./services/whatsapp.service')))).default;
+                const { emitToUser } = await Promise.resolve().then(() => __importStar(require('./sockets/socket.server')));
+                for (const inst of dbConnected) {
+                    try {
+                        const state = await wha.getInstanceState(inst.name);
+                        if (state === 'close') {
+                            await database_2.default.whatsAppInstance.update({
+                                where: { id: inst.id },
+                                data: { status: 'disconnected', qrCode: null }
+                            });
+                            emitToUser(inst.userId, 'whatsapp_disconnected', { instanceId: inst.id });
+                            logger_1.default.warn(`[Cron] ${inst.name} desconectada detectada no sync`);
+                        }
+                    }
+                    catch { /* ignora timeout */ }
+                    await new Promise(r => setTimeout(r, 300)); // 300ms entre cada check
+                }
+            }
+        }
+        catch { /* ignora */ }
+    });
+    // A cada 2 minutos: sincronizar status do banco com a Evolution
+    node_cron_1.default.schedule('*/2 * * * *', async () => {
+        try {
+            const wha = (await Promise.resolve().then(() => __importStar(require('./services/whatsapp.service')))).default;
+            const evInstances = await wha.fetchInstances().catch(() => []);
+            if (!evInstances.length)
+                return;
+            const { emitToUser } = await Promise.resolve().then(() => __importStar(require('./sockets/socket.server')));
+            for (const evInst of evInstances) {
+                const name = evInst.instanceName;
+                const evStatus = evInst.status; // 'connected' | 'disconnected' | 'connecting'
+                if (!name)
+                    continue;
+                const dbInst = await database_2.default.whatsAppInstance.findFirst({
+                    where: { name, isActive: true }
+                });
+                if (!dbInst)
+                    continue;
+                if (evStatus === 'connected' && dbInst.status !== 'connected') {
+                    const owner = evInst.ownerJid || evInst.owner || '';
+                    const phone = owner.replace('@s.whatsapp.net', '').replace('@c.us', '') || dbInst.phoneNumber;
+                    await database_2.default.whatsAppInstance.update({
+                        where: { id: dbInst.id },
+                        data: { status: 'connected', qrCode: null, connectedAt: dbInst.connectedAt || new Date(), ...(phone ? { phoneNumber: phone } : {}) }
+                    });
+                    emitToUser(dbInst.userId, 'whatsapp_connected', { instanceId: dbInst.id, phoneNumber: phone, status: 'connected' });
+                    logger_1.default.info(`[Sync] ${name} -> connected (${phone})`);
+                }
+                else if (evStatus === 'disconnected' && dbInst.status === 'connected') {
+                    await database_2.default.whatsAppInstance.update({
+                        where: { id: dbInst.id },
+                        data: { status: 'disconnected', qrCode: null }
+                    });
+                    emitToUser(dbInst.userId, 'whatsapp_disconnected', { instanceId: dbInst.id });
+                    logger_1.default.warn(`[Sync] ${name} -> disconnected`);
+                }
+            }
+        }
+        catch { /* ignora */ }
+    });
+    // A cada hora: cancelar campanhas de instâncias deletadas
+    node_cron_1.default.schedule('0 * * * *', async () => {
+        try {
+            const cancelled = await database_2.default.campaign.updateMany({
+                where: { status: { in: ['running', 'paused', 'pending'] }, instance: { isActive: false } },
+                data: { status: 'cancelled', completedAt: new Date() },
+            });
+            if (cancelled.count > 0)
+                logger_1.default.warn(`[Cron] ${cancelled.count} campanha(s) zumbi cancelada(s)`);
+        }
+        catch { /* ignora */ }
+    });
     // 6. HTTP Server
     server.listen(PORT, HOST, () => {
         logger_1.default.info(`🚀 Servidor rodando em http://${HOST}:${PORT}`);
