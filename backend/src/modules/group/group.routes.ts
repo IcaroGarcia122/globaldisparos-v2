@@ -100,7 +100,7 @@ router.get('/participants/:instanceId/:groupId', authenticate, async (req: AuthR
   }
 });
 
-/** GET /api/groups/admin-only/:instanceId — grupos onde a instância é admin */
+/** GET /api/groups/admin-only/:instanceId — todos os grupos da instância */
 router.get('/admin-only/:instanceId', authenticate, async (req: AuthRequest, res: Response) => {
   const instanceId = parseInt(req.params.instanceId);
   try {
@@ -108,64 +108,49 @@ router.get('/admin-only/:instanceId', authenticate, async (req: AuthRequest, res
       where: { id: instanceId },
       select: { name: true, phoneNumber: true, status: true },
     });
-    const ownerPhone = (instance?.phoneNumber || '').replace(/[^0-9]/g, '');
     const instanceName = instance?.name || `instance_${instanceId}`;
-    logger.info(`[AdminGroups] instanceId=${instanceId} phone="${ownerPhone}" status="${instance?.status}"`);
+    logger.info(`[AdminGroups] instanceId=${instanceId} instanceName="${instanceName}" status="${instance?.status}"`);
 
-    if (!ownerPhone) {
-      return res.status(400).json({ error: 'Número da instância não encontrado no banco. Reconecte o WhatsApp.' });
-    }
-
-    // ── 1. Sempre tenta Evolution primeiro (fonte mais atualizada) ─────────────
-    if (instance?.status === 'connected') {
-      const evolutionGroups = await whatsappService.getGroupsWhereAdmin(instanceName, ownerPhone).catch(() => []);
-      if (evolutionGroups.length > 0) {
-        // Salva grupos novos no banco em background
-        saveGroupsFromWebhook(instanceId, evolutionGroups.map((g: any) => ({
-          id: g.groupId, subject: g.name, size: g.participantsCount,
-        }))).catch(() => {});
-        logger.info(`[AdminGroups] ${evolutionGroups.length} grupos admin via Evolution`);
-        return res.json({ groups: evolutionGroups, source: 'evolution' });
-      }
-      logger.warn(`[AdminGroups] Evolution retornou 0 grupos admin para ${instanceName} — usando banco`);
-    }
-
-    // ── 2. Fallback: banco de dados ────────────────────────────────────────────
-    const suffix = ownerPhone.slice(-8);
-    const allGroups = await prisma.whatsAppGroup.findMany({
+    // ── 1. Banco de dados (rápido, sempre atualizado pelo sync) ───────────────
+    const dbGroups = await prisma.whatsAppGroup.findMany({
       where: { instanceId },
-      select: { groupId: true, name: true, participantsCount: true, participantsList: true },
+      orderBy: { name: 'asc' },
+      select: { groupId: true, name: true, participantsCount: true },
     });
 
-    if (allGroups.length === 0) {
-      // Sem grupos no banco e Evolution falhou — dispara sync e avisa
-      syncGroupsBackground(instanceId).catch(() => {});
-      return res.status(404).json({ error: 'Nenhum grupo encontrado. Aguarde alguns segundos e tente novamente (sincronização em andamento).' });
-    }
-
-    // Tenta filtrar por participantsList.admins
-    const adminGroups = allGroups.filter(g => {
-      const pl = g.participantsList as any;
-      if (!pl) return false;
-      const admins: string[] = pl.admins || [];
-      return admins.some((a: string) => a.replace(/[^0-9]/g, '').endsWith(suffix));
-    });
-
-    if (adminGroups.length > 0) {
-      logger.info(`[AdminGroups] ${adminGroups.length} grupos admin via banco (participantsList)`);
+    if (dbGroups.length > 0) {
+      logger.info(`[AdminGroups] ${dbGroups.length} grupos do banco para ${instanceName}`);
+      // Dispara sync em background para pegar grupos novos na próxima requisição
+      if (instance?.status === 'connected' && !isSyncing(instanceId)) {
+        syncGroupsBackground(instanceId).catch(() => {});
+      }
       return res.json({
-        groups: adminGroups.map(g => ({ groupId: g.groupId, name: g.name, participantsCount: g.participantsCount })),
-        source: 'database_admins',
+        groups: dbGroups.map(g => ({ groupId: g.groupId, name: g.name, participantsCount: g.participantsCount })),
+        source: 'database',
       });
     }
 
-    // Sem dado de admin — retorna todos com aviso (melhor que vazio)
-    logger.warn(`[AdminGroups] Sem dados de admin — retornando todos os ${allGroups.length} grupos do banco`);
-    return res.json({
-      groups: allGroups.map(g => ({ groupId: g.groupId, name: g.name, participantsCount: g.participantsCount })),
-      source: 'database_all',
-      warning: 'Mostrando todos os grupos (dados de admin não disponíveis). Somente grupos onde você é admin permitem adicionar membros.',
-    });
+    // ── 2. Banco vazio — busca direto na Evolution ─────────────────────────────
+    if (instance?.status !== 'connected') {
+      return res.status(404).json({ error: 'Instância não conectada e nenhum grupo no banco.' });
+    }
+
+    logger.info(`[AdminGroups] Banco vazio — buscando da Evolution para ${instanceName}`);
+    syncGroupsBackground(instanceId).catch(() => {});
+
+    const raw = await whatsappService.fetchGroups(instanceName).catch(() => []);
+    if (raw.length > 0) {
+      await saveGroupsFromWebhook(instanceId, raw).catch(() => {});
+      const groups = raw.map((g: any) => ({
+        groupId: g.id || g.jid,
+        name: g.subject || g.name || (g.id || '').slice(-12),
+        participantsCount: g.size || 0,
+      }));
+      logger.info(`[AdminGroups] ${groups.length} grupos da Evolution para ${instanceName}`);
+      return res.json({ groups, source: 'evolution' });
+    }
+
+    return res.status(404).json({ error: 'Nenhum grupo encontrado. Aguarde alguns segundos e recarregue (sincronização em andamento).' });
   } catch (err: any) {
     logger.error(`[AdminGroups] Erro: ${err.message}`);
     return res.status(500).json({ error: err.message });
