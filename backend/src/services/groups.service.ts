@@ -170,8 +170,8 @@ export async function syncGroupsBackground(instanceId: number, delayMs = 0): Pro
 }
 
 /**
- * Sincroniza participantes de todos os grupos da instância.
- * Chamado automaticamente após sync de grupos para popular participantsList.admins.
+ * Sincroniza participantes de todos os grupos via UMA única chamada fetchAllGroups?getParticipants=true.
+ * Muito mais rápido que chamar grupo por grupo.
  */
 export async function syncAllParticipants(instanceId: number, instanceName: string): Promise<void> {
   const key = String(instanceId);
@@ -179,41 +179,47 @@ export async function syncAllParticipants(instanceId: number, instanceName: stri
   participantSyncRunning.add(key);
 
   try {
-    const groups = await prisma.whatsAppGroup.findMany({
-      where: { instanceId },
-      select: { groupId: true },
-    });
-    if (!groups.length) return;
+    logger.info(`[Groups] Sync participantes (bulk) para ${instanceName}`);
 
-    logger.info(`[Groups] Sync participantes: ${groups.length} grupos para ${instanceName}`);
+    // Uma única chamada para todos os grupos com participantes
+    const axios = (await import('axios')).default;
+    const baseURL = (process.env.EVOLUTION_API_URL || 'http://127.0.0.1:8081').replace('localhost', '127.0.0.1');
+    const apiKey  = process.env.EVOLUTION_API_KEY || '';
+
+    const res = await axios.get(
+      `${baseURL}/group/fetchAllGroups/${instanceName}?getParticipants=true`,
+      { headers: { apikey: apiKey }, timeout: 120000 }
+    );
+
+    const raw = Array.isArray(res.data) ? res.data : (res.data?.groups || res.data?.value || []);
+    const withParticipants = raw.filter((g: any) =>
+      (g.id || g.jid || '').includes('@g.us') && Array.isArray(g.participants) && g.participants.length > 0
+    );
+
+    logger.info(`[Groups] ${withParticipants.length} grupos com participantes recebidos da Evolution`);
+
     let synced = 0;
+    for (const g of withParticipants) {
+      const gid: string = g.id || g.jid;
+      const participants: string[] = [];
+      const admins: string[] = [];
 
-    for (const g of groups) {
-      try {
-        const raw = await whatsappService.getGroupParticipants(instanceName, g.groupId);
-        if (!raw.length) continue;
+      for (const p of g.participants) {
+        const jid: string = p.id || p.jid || p.phoneNumber || '';
+        const phone = jid.replace('@s.whatsapp.net', '').replace('@c.us', '').replace(/\D/g, '');
+        if (!phone || phone.length < 8) continue;
+        participants.push(phone);
+        if (p.admin === 'admin' || p.admin === 'superadmin' || p.isAdmin) admins.push(phone);
+      }
+      if (!participants.length) continue;
 
-        const participants: string[] = [];
-        const admins: string[] = [];
-        for (const p of raw) {
-          const jid: string = p.id || p.jid || p.phoneNumber || '';
-          const phone = jid.replace('@s.whatsapp.net', '').replace('@c.us', '').replace(/\D/g, '');
-          if (!phone || phone.length < 8) continue;
-          participants.push(phone);
-          if (p.admin === 'admin' || p.admin === 'superadmin' || p.isAdmin) admins.push(phone);
-        }
-        if (!participants.length) continue;
-
-        await prisma.whatsAppGroup.updateMany({
-          where: { instanceId, groupId: g.groupId },
-          data: { participantsList: { participants, admins } as any, participantsCount: participants.length, participantsSyncedAt: new Date() },
-        });
-        synced++;
-      } catch { /* grupo falhou, continua */ }
-
-      await new Promise(r => setTimeout(r, 300)); // delay entre grupos
+      await prisma.whatsAppGroup.updateMany({
+        where: { instanceId, groupId: gid },
+        data: { participantsList: { participants, admins } as any, participantsCount: participants.length, participantsSyncedAt: new Date() },
+      }).catch(() => {});
+      synced++;
     }
-    logger.info(`[Groups] ✅ Sync participantes concluído: ${synced}/${groups.length} para ${instanceName}`);
+    logger.info(`[Groups] ✅ Sync participantes concluído: ${synced} grupos atualizados para ${instanceName}`);
   } catch (err: any) {
     logger.warn(`[Groups] Sync participantes erro: ${err.message}`);
   } finally {
