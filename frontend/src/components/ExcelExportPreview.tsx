@@ -37,7 +37,7 @@ export const ExcelExportPreview: React.FC<ExcelExportPreviewProps> = ({ groupId 
 
     setLoading(true);
     try {
-      const response = await fetch(`http://localhost:3001/api/groups/${groupId}/participants`, {
+      const response = await fetch(`/api/groups/${groupId}/participants`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token')}`,
         },
@@ -68,7 +68,7 @@ export const ExcelExportPreview: React.FC<ExcelExportPreviewProps> = ({ groupId 
 
     setDownloading(true);
     try {
-      const response = await fetch(`http://localhost:3001/api/groups/${groupId}/export-xlsx`, {
+      const response = await fetch(`/api/groups/${groupId}/export-xlsx`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token')}`,

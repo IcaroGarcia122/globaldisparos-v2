@@ -54,7 +54,7 @@ const GroupToXlsxExporter: React.FC = () => {
     setExporting(true); setError(''); setSuccess('');
     try {
       const token = localStorage.getItem('token');
-      const url   = `http://localhost:3001/api/groups/export-xlsx/${instanceId}/${encodeURIComponent(groupId)}?excludeAdmins=${filterAdmin}`;
+      const url   = `/api/groups/export-xlsx/${instanceId}/${encodeURIComponent(groupId)}?excludeAdmins=${filterAdmin}`;
       const res   = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
       if (!res.ok) throw new Error('Erro ao gerar arquivo');
       const blob  = await res.blob();

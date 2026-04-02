@@ -29,7 +29,7 @@ const ImportCSV: React.FC = () => {
 
       const token = localStorage.getItem('token');
 
-      const response = await fetch('http://localhost:3001/api/contacts/import-csv', {
+      const response = await fetch('/api/contacts/import-csv', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`

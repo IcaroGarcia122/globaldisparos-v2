@@ -73,7 +73,8 @@ export default function Disparador() {
 
   // Conectar ao servidor
   useEffect(() => {
-    const newSocket = io('http://localhost:3001', {
+    const socketUrl = window.location.hostname === 'localhost' ? 'http://localhost:3001' : window.location.origin;
+    const newSocket = io(socketUrl, {
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionDelay: 1000,

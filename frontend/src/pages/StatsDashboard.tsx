@@ -51,13 +51,13 @@ export const StatsDashboard: React.FC = () => {
     try {
       setError('');
       const [userStats, instancesResponse, antiBanResponse] = await Promise.all([
-        fetch('http://localhost:3001/api/stats/user', {
+        fetch('/api/stats/user', {
           headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
         }),
-        fetch('http://localhost:3001/api/stats/user', {
+        fetch('/api/stats/user', {
           headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
         }),
-        fetch('http://localhost:3001/api/stats/antiban/status', {
+        fetch('/api/stats/antiban/status', {
           headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
         }),
       ]);
