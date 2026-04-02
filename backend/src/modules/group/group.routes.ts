@@ -349,19 +349,20 @@ router.get('/export-xlsx/:instanceId/:groupId', authenticate, async (req: AuthRe
   const excludeAdmins = req.query.excludeAdmins === 'true';
 
   try {
-    // Usa APENAS o banco — nunca chama Evolution aqui (evita timeout de 3min que derruba a conexão)
+    // Usa getParticipants que busca do banco OU da Evolution automaticamente
+    const result = await getParticipants(instanceId, groupId);
+    const participants: string[] = result.participants || [];
+    const admins: string[]       = result.admins || [];
+
+    // Nome do grupo para o filename
     const row = await prisma.whatsAppGroup.findFirst({
       where: { instanceId, groupId },
-      select: { participantsList: true, participantsCount: true, name: true },
+      select: { name: true },
     });
-
-    const cached = row?.participantsList as any;
-    const participants: string[] = cached?.participants || [];
-    const admins: string[]       = cached?.admins || [];
 
     if (participants.length === 0) {
       return res.status(404).json({
-        error: 'Participantes não sincronizados para este grupo. Vá em Gestão de Grupos → Sincronizar Participantes e tente novamente.',
+        error: 'Não foi possível obter os participantes deste grupo. Verifique se a instância está conectada e tente novamente.',
       });
     }
 
