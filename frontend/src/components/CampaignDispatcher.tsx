@@ -62,7 +62,7 @@ const CampaignDispatcher: React.FC = () => {
   const loadCampaigns = async () => {
     try {
       const data = await fetchAPI('/campaigns');
-      setCampaigns(data || []);
+      setCampaigns(Array.isArray(data) ? data : (Array.isArray(data?.campaigns) ? data.campaigns : []));
     } catch (err) {
       console.error('Erro ao carregar campanhas:', err);
     }

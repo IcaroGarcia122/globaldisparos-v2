@@ -48,7 +48,7 @@ export const ExcelExportPreview: React.FC<ExcelExportPreviewProps> = ({ groupId 
       }
 
       const data = await response.json();
-      setContacts(data);
+      setContacts(Array.isArray(data) ? data : []);
       setErrorMessage('');
     } catch (error: any) {
       setErrorMessage(error.message || 'Erro ao carregar participantes');

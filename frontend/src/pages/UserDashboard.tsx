@@ -91,7 +91,7 @@ const UserDashboard: React.FC = () => {
   const reloadContactLists = async () => {
     try {
       const data = await fetchAPI('/contacts');
-      setContactLists(data || []);
+      setContactLists(Array.isArray(data) ? data : (Array.isArray(data?.lists) ? data.lists : []));
     } catch (error) {
       console.error('Erro ao carregar listas:', error);
     }

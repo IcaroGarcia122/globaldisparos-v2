@@ -755,7 +755,7 @@ const LiveLogs: React.FC = () => {
       try {
         const data = await fetchAPI('/auth/admin/logs');
         if (data?.logs) {
-          setLogs(data.logs);
+          setLogs(Array.isArray(data.logs) ? data.logs : []);
           setConnected(true);
         }
       } catch { /* ignora */ }

@@ -54,8 +54,8 @@ export function CampaignDashboard({ campaignId, onClose }: CampaignDashboardProp
         if (data) {
           setCampaign(data.campaign)
           setMetrics(data.metrics)
-          setRecentContacts(data.recentContacts || [])
-          setTimelineData(data.timeline || [])
+          setRecentContacts(Array.isArray(data.recentContacts) ? data.recentContacts : [])
+          setTimelineData(Array.isArray(data.timeline) ? data.timeline : [])
           setNewMessage(data.campaign.message)
           setLoading(false)
         }

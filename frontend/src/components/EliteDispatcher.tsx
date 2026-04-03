@@ -228,7 +228,7 @@ const EliteDispatcher: React.FC = () => {
     try {
       const endpoint = forceSync ? `/groups/sync/${instId}` : `/groups?instanceId=${instId}`;
       const data = await fetchAPI(endpoint);
-      if (data?.groups?.length > 0) {
+      if (Array.isArray(data?.groups) && data.groups.length > 0) {
         setGroups(data.groups);
         setGroupsLoading(false);
         setGroupsSyncing(false);
@@ -250,7 +250,7 @@ const EliteDispatcher: React.FC = () => {
     pollRef.current = setInterval(async () => {
       try {
         const data = await fetchAPI(`/groups?instanceId=${instId}`);
-        if (data?.groups?.length > 0) {
+        if (Array.isArray(data?.groups) && data.groups.length > 0) {
           setGroups(data.groups);
           setGroupsLoading(false);
           setGroupsSyncing(false);
