@@ -47,11 +47,23 @@ async function parseContactFile(file: File): Promise<string[]> {
   });
 }
 
+const STORAGE_KEY = 'gm_campaign_state';
+
+function loadSavedState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch { return null; }
+}
+
 const GroupManager: React.FC = () => {
-  const [step, setStep]           = useState(1);
-  const [instanceId, setInstanceId] = useState('');
-  const [groupId, setGroupId]     = useState('');
-  const [groupName, setGroupName] = useState('');
+  const saved = loadSavedState();
+
+  const [step, setStep]           = useState<number>(saved?.step || 1);
+  const [instanceId, setInstanceId] = useState<string>(saved?.instanceId || '');
+  const [groupId, setGroupId]     = useState<string>(saved?.groupId || '');
+  const [groupName, setGroupName] = useState<string>(saved?.groupName || '');
 
   const [instances, setInstances] = useState<Instance[]>([]);
   const [groups, setGroups]       = useState<Group[]>([]);
@@ -64,11 +76,11 @@ const GroupManager: React.FC = () => {
 
   const [searchGroup, setSearchGroup] = useState('');
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
-  const [queue, setQueue]       = useState<QueueItem[]>([]);
+  const [queue, setQueue]       = useState<QueueItem[]>(saved?.queue || []);
   const [isRunning, setIsRunning] = useState(false);
   const [isPaused, setIsPaused]   = useState(false);
-  const [delaySec, setDelaySec]   = useState(45);
-  const [progress, setProgress]   = useState(0);
+  const [delaySec, setDelaySec]   = useState<number>(saved?.delaySec || 45);
+  const [progress, setProgress]   = useState<number>(saved?.progress || 0);
   const [countdown, setCountdown] = useState(0);
 
   // ── From saved list ───────────────────────────────────────────────────────
@@ -80,6 +92,16 @@ const GroupManager: React.FC = () => {
   const pauseRef   = useRef(false);
   const queueRef   = useRef<QueueItem[]>([]);
 
+  // ── Persistir estado no localStorage ─────────────────────────────────────
+  useEffect(() => {
+    if (step === 1 && !instanceId) {
+      localStorage.removeItem(STORAGE_KEY);
+      return;
+    }
+    const state = { step, instanceId, groupId, groupName, delaySec, progress, queue };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }, [step, instanceId, groupId, groupName, delaySec, progress, queue]);
+
   // ── Instâncias ────────────────────────────────────────────────────────────
   useEffect(() => {
     (async () => {
@@ -87,7 +109,12 @@ const GroupManager: React.FC = () => {
       try {
         const res  = await fetchAPI('/instances');
         const list = (res?.data || res?.instances || res || []) as Instance[];
-        setInstances(Array.isArray(list) ? list : []);
+        const arr  = Array.isArray(list) ? list : [];
+        setInstances(arr);
+        // Se há estado salvo com instância, recarregar grupos automaticamente
+        if (saved?.instanceId && saved?.step >= 2 && arr.length > 0) {
+          loadGroups(saved.instanceId);
+        }
       } catch { setError('Erro ao carregar instâncias'); }
       finally { setLoadingInst(false); }
     })();
@@ -185,6 +212,8 @@ const GroupManager: React.FC = () => {
     const failed = items.filter(i => i.status === 'failed').length;
     setSuccess(`✅ ${added}/${items.length} adicionados com sucesso.${failed > 0 ? ` ${failed} falhas.` : ''}`);
     setIsRunning(false); setCountdown(0);
+    // Campanha finalizada — limpa estado salvo
+    localStorage.removeItem(STORAGE_KEY);
   };
 
   const handleStart = () => {
@@ -206,6 +235,7 @@ const GroupManager: React.FC = () => {
     setIsPaused(false);
     setIsRunning(false);
     setCountdown(0);
+    localStorage.removeItem(STORAGE_KEY);
   };
 
   const clearQueue = () => {
