@@ -125,7 +125,8 @@ export default function Disparador() {
   const carregarInstancias = async () => {
     try {
       const response = await fetchAPI('/instances');
-      const instanciasConectadas = response.data.filter(
+      const all = response?.data || response?.instances || response || [];
+      const instanciasConectadas = (Array.isArray(all) ? all : []).filter(
         (inst: Instance) => inst.status === 'connected'
       );
 
@@ -151,7 +152,7 @@ export default function Disparador() {
         method: 'GET'
       });
 
-      const gruposData = response || [];
+      const gruposData = Array.isArray(response?.groups) ? response.groups : (Array.isArray(response) ? response : []);
       setGroups(gruposData);
 
       if (gruposData.length === 0) {

@@ -61,9 +61,8 @@ const WarmupCloud: React.FC = () => {
       setLoading(true);
       try {
         const res  = await fetchAPI('/instances');
-        const list = (res?.data || res?.instances || res || []) as Instance[];
-        // Mostrar todas as instâncias ativas (conectadas OU não)
-        // O status é apenas informativo — não bloqueia a seleção
+        const raw = res?.data || res?.instances || res || [];
+        const list = (Array.isArray(raw) ? raw : []) as Instance[];
         setInstances(list);
         const saved = localStorage.getItem('warmup_selected_instance');
         const savedInst = saved && list.find((i: Instance) => i.id === saved);

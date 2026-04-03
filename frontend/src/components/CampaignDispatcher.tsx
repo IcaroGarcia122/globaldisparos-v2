@@ -51,7 +51,8 @@ const CampaignDispatcher: React.FC = () => {
   const loadGroups = async (instanceId: string) => {
     try {
       const data = await fetchAPI(`/groups?instanceId=${instanceId}`);
-      setGroups(data || []);
+      const groups = Array.isArray(data?.groups) ? data.groups : (Array.isArray(data) ? data : []);
+      setGroups(groups);
     } catch (err) {
       console.error('Erro ao carregar grupos:', err);
       setGroups([]);
