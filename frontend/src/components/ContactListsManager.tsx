@@ -188,7 +188,8 @@ const ContactListsManager: React.FC = () => {
     try {
       // Usa endpoint geral — retorna TODOS os grupos da instância, não só admin
       const res = await fetchAPI(`/groups?instanceId=${instId}`);
-      const list = res?.groups || [];
+      const raw = res?.groups || res || [];
+      const list = Array.isArray(raw) ? raw : [];
       setGroups(list);
       if (list.length === 0 && !res?.loading) {
         setError('Nenhum grupo encontrado. Tente sincronizar abaixo.');
