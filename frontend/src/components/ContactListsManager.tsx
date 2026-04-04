@@ -273,14 +273,14 @@ const ContactListsManager: React.FC = () => {
 
   const goBackFromExtract = () => {
     if (extractOriginListId) {
-      const list = lists.find(l => l.id === extractOriginListId);
+      const list = Array.isArray(lists) ? lists.find(l => l.id === extractOriginListId) : undefined;
       if (list) { openDetail(list); return; }
     }
     setView('lists'); setError(''); setSuccess('');
   };
 
-  const extInstSelected   = instances.find(i => i.id === extInstId);
-  const filteredExtGroups = groups.filter(g => g.name?.toLowerCase().includes(extSearch.toLowerCase()));
+  const extInstSelected   = Array.isArray(instances) ? instances.find(i => i.id === extInstId) : undefined;
+  const filteredExtGroups = Array.isArray(groups) ? groups.filter(g => g.name?.toLowerCase().includes(extSearch.toLowerCase())) : [];
 
   // ════════════════════════════════════════════════════════════════════════════
   // EXTRACT VIEW

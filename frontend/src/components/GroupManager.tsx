@@ -76,7 +76,7 @@ const GroupManager: React.FC = () => {
 
   const [searchGroup, setSearchGroup] = useState('');
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
-  const [queue, setQueue]       = useState<QueueItem[]>(saved?.queue || []);
+  const [queue, setQueue]       = useState<QueueItem[]>(Array.isArray(saved?.queue) ? saved.queue : []);
   const [isRunning, setIsRunning] = useState(false);
   const [isPaused, setIsPaused]   = useState(false);
   const [delaySec, setDelaySec]   = useState<number>(saved?.delaySec || 45);
@@ -271,11 +271,14 @@ const GroupManager: React.FC = () => {
   };
 
   // ── Helpers ───────────────────────────────────────────────────────────────
-  const selectedInst   = instances.find(i => i.id === instanceId);
-  const filteredGroups = groups.filter(g => g.name?.toLowerCase().includes(searchGroup.toLowerCase()));
-  const addedCount     = queue.filter(i => i.status === 'added').length;
-  const failedCount    = queue.filter(i => i.status === 'failed').length;
-  const pendingCount   = queue.filter(i => i.status === 'pending').length;
+  const safeInstances  = Array.isArray(instances) ? instances : [];
+  const safeGroups     = Array.isArray(groups) ? groups : [];
+  const safeQueue      = Array.isArray(queue) ? queue : [];
+  const selectedInst   = safeInstances.find(i => i.id === instanceId);
+  const filteredGroups = safeGroups.filter(g => g.name?.toLowerCase().includes(searchGroup.toLowerCase()));
+  const addedCount     = safeQueue.filter(i => i.status === 'added').length;
+  const failedCount    = safeQueue.filter(i => i.status === 'failed').length;
+  const pendingCount   = safeQueue.filter(i => i.status === 'pending').length;
   const estMinutes     = Math.ceil((pendingCount * delaySec) / 60);
 
   // ════════════════════════════════════════════════════════════════════════════

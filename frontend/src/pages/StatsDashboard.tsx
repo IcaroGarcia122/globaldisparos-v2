@@ -76,7 +76,7 @@ export const StatsDashboard: React.FC = () => {
 
       if (antiBanResponse.ok) {
         const antiBan = await antiBanResponse.json();
-        setAntiBanStatus(antiBan);
+        setAntiBanStatus(Array.isArray(antiBan) ? antiBan : []);
       }
     } catch (err: any) {
       setError(err.message || 'Erro ao carregar estatísticas');

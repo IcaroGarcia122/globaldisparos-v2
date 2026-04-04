@@ -120,7 +120,7 @@ export const GroupDispatchUI: React.FC = () => {
     }
   };
 
-  const selectedGroup = groups.find((g) => g.id === options.groupId);
+  const selectedGroup = Array.isArray(groups) ? groups.find((g) => g.id === options.groupId) : undefined;
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -284,7 +284,7 @@ export const GroupDispatchUI: React.FC = () => {
         <CardContent className="space-y-4 text-sm">
           <div>
             <h4 className="font-semibold mb-1">Status da Instância</h4>
-            {options.instanceId && instances.find((i) => i.id === options.instanceId) ? (
+            {options.instanceId && Array.isArray(instances) && instances.find((i) => i.id === options.instanceId) ? (
               <div className="p-2 bg-blue-50 rounded text-blue-900">
                 <p className="font-mono">
                   {instances.find((i) => i.id === options.instanceId)?.name}

@@ -171,7 +171,7 @@ const WarmupCloud: React.FC = () => {
   };
 
   // Valores derivados — ordem importa
-  const inst            = instances.find(i => i.id === selectedId);
+  const inst            = Array.isArray(instances) ? instances.find(i => i.id === selectedId) : undefined;
   // Dia: SEMPRE vem do servidor. Quando parado, usar último dia salvo no localStorage
   const savedDay        = selectedId ? parseInt(localStorage.getItem(storageKey(selectedId)) || '1') : 1;
   const day             = status?.running ? status.day : (status?.day ?? savedDay);
