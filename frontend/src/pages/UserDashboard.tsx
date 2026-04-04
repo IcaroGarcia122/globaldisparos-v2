@@ -127,7 +127,7 @@ const UserDashboard: React.FC = () => {
     setLogsLoading(true);
     try {
       const data = await fetchAPI(`/stats/logs?page=${page}&limit=50`);
-      setLogs(data?.logs || []);
+      setLogs(Array.isArray(data?.logs) ? data.logs : []);
       setLogsTotal(data?.pagination?.total || 0);
       setLogsPage(page);
     } catch (error) {

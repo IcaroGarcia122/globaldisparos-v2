@@ -10,12 +10,13 @@ interface Props {
 interface State {
   hasError: boolean;
   error: Error | null;
+  componentStack?: string | null;
 }
 
 export class ErrorBoundary extends React.Component<Props, State> {
   constructor(props: Props) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { hasError: false, error: null, componentStack: null };
   }
 
   static getDerivedStateFromError(error: Error): State {
@@ -24,6 +25,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     console.error('ErrorBoundary caught:', error, errorInfo);
+    this.setState({ componentStack: errorInfo.componentStack });
   }
 
   render() {
@@ -38,12 +40,20 @@ export class ErrorBoundary extends React.Component<Props, State> {
               </CardTitle>
             </CardHeader>
             <CardContent className="pt-6">
-              <p className="text-red-800 text-sm">
+              <p className="text-red-800 text-sm font-bold">
                 {this.state.error?.message || 'Erro desconhecido'}
               </p>
-              <p className="text-red-700 text-xs mt-2">
+              <p className="text-red-700 text-xs mt-2 mb-3">
                 Tente recarregar a página ou verifique se o backend está rodando.
               </p>
+              {this.state.componentStack && (
+                <details className="mt-2">
+                  <summary className="text-red-600 text-xs cursor-pointer font-bold">Ver detalhes técnicos</summary>
+                  <pre className="text-red-700 text-[10px] mt-2 overflow-auto max-h-40 bg-red-100 p-2 rounded whitespace-pre-wrap break-all">
+                    {this.state.componentStack}
+                  </pre>
+                </details>
+              )}
             </CardContent>
           </Card>
         )
