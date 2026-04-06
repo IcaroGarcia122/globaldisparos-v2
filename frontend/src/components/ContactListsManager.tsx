@@ -97,7 +97,7 @@ const ContactListsManager: React.FC = () => {
     setLoadingContacts(true);
     try {
       const data = await fetchAPI(`/contacts/lists/${listId}/contacts?page=${page}&limit=50`);
-      setContacts(data.contacts || []);
+      setContacts(Array.isArray(data.contacts) ? data.contacts : []);
       setContactsTotal(data.pagination?.total || 0);
       setContactsPage(page);
     } catch { setError('Erro ao carregar contatos'); }

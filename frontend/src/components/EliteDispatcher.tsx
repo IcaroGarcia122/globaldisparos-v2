@@ -182,7 +182,7 @@ const EliteDispatcher: React.FC = () => {
 
     // Recuperar campanha ativa caso tenha feito logout/login com campanha em andamento
     fetchAPI('/campaigns/active').then(active => {
-      if (!active) return;
+      if (!active || active._error || active._httpStatus) return;
       campaignIdRef.current = active.id;
       setCampaign({
         status: active.status,
@@ -203,6 +203,7 @@ const EliteDispatcher: React.FC = () => {
         if (!campaignIdRef.current) return;
         try {
           const m = await fetchAPI(`/campaigns/${campaignIdRef.current}/metricas`);
+          if (m._error || !m.metrics) return;
           setCampaign(prev => prev ? { ...prev, status: m.status, sent: m.metrics.sent, failed: m.metrics.failed, total: m.metrics.total } : prev);
           if (m.status === 'done' || m.status === 'cancelled') {
             clearInterval(pollRef.current!);

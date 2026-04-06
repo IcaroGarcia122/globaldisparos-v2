@@ -51,7 +51,7 @@ export function CampaignDashboard({ campaignId, onClose }: CampaignDashboardProp
           method: 'GET'
         })
 
-        if (data) {
+        if (data && !data._error && data.campaign && data.metrics) {
           setCampaign(data.campaign)
           setMetrics(data.metrics)
           setRecentContacts(Array.isArray(data.recentContacts) ? data.recentContacts : [])

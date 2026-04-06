@@ -347,19 +347,18 @@ router.post('/sync-participants/:instanceId', authenticate, async (req: AuthRequ
   }
 });
 
-/** GET /api/groups/export-xlsx/:instanceId/:groupId — exporta participantes como XLSX */
+/** GET /api/groups/export-xlsx/:instanceId/:groupId — exporta participantes como CSV ou XLSX */
 router.get('/export-xlsx/:instanceId/:groupId', authenticate, async (req: AuthRequest, res: Response) => {
   const instanceId = parseInt(req.params.instanceId);
   const { groupId } = req.params;
   const excludeAdmins = req.query.excludeAdmins === 'true';
+  const format = (req.query.format as string || 'csv').toLowerCase(); // 'csv' | 'xlsx'
 
   try {
-    // Usa getParticipants que busca do banco OU da Evolution automaticamente
     const result = await getParticipants(instanceId, groupId);
     const participants: string[] = result.participants || [];
     const admins: string[]       = result.admins || [];
 
-    // Nome do grupo para o filename
     const row = await prisma.whatsAppGroup.findFirst({
       where: { instanceId, groupId },
       select: { name: true },
@@ -371,24 +370,33 @@ router.get('/export-xlsx/:instanceId/:groupId', authenticate, async (req: AuthRe
       });
     }
 
-    // Filtrar admins se solicitado
     const list = excludeAdmins
       ? participants.filter((p: string) => !admins.includes(p))
       : participants;
 
-    const rows = [['#', 'Telefone', 'Admin', 'Numero_Whatsapp']];
-    list.forEach((phone: string, i: number) => {
-      const isAdmin = admins.includes(phone) ? 'SIM' : 'NAO';
-      rows.push([(i + 1).toString(), phone, isAdmin, `+${phone}`]);
-    });
-
-    const bom = '\uFEFF';
-    const csv = bom + rows.map(r => r.map(c => `"${c}"`).join(',')).join('\r\n');
-
     const groupName = (row?.name || groupId).replace(/[^a-zA-Z0-9_\-\u00C0-\u017F ]/g, '_').slice(0, 40);
     const date = new Date().toISOString().split('T')[0];
-    const filename = `contatos_${groupName}_${date}.csv`;
 
+    if (format === 'xlsx') {
+      const XLSX = require('xlsx');
+      // Single column: just phone numbers
+      const wsData = list.map((phone: string) => [phone]);
+      const ws = XLSX.utils.aoa_to_sheet(wsData);
+      // Set column width
+      ws['!cols'] = [{ wch: 20 }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Contatos');
+      const buf: Buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+      const filename = `contatos_${groupName}_${date}.xlsx`;
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      return res.send(buf);
+    }
+
+    // CSV: one phone number per row, no header
+    const bom = '\uFEFF';
+    const csv = bom + list.join('\r\n');
+    const filename = `contatos_${groupName}_${date}.csv`;
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     return res.send(csv);

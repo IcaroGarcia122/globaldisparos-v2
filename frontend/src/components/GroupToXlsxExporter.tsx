@@ -20,6 +20,7 @@ const GroupToXlsxExporter: React.FC = () => {
   const [exporting, setExporting]         = useState(false);
 
   const [filterAdmin, setFilterAdmin] = useState(false);
+  const [exportFormat, setExportFormat] = useState<'csv' | 'xlsx'>('csv');
   const [search, setSearch]           = useState('');
   const [error, setError]             = useState('');
   const [success, setSuccess]         = useState('');
@@ -54,13 +55,13 @@ const GroupToXlsxExporter: React.FC = () => {
     setExporting(true); setError(''); setSuccess('');
     try {
       const token = localStorage.getItem('token');
-      const url   = `/api/groups/export-xlsx/${instanceId}/${encodeURIComponent(groupId)}?excludeAdmins=${filterAdmin}`;
+      const url   = `/api/groups/export-xlsx/${instanceId}/${encodeURIComponent(groupId)}?excludeAdmins=${filterAdmin}&format=${exportFormat}`;
       const res   = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
       if (!res.ok) throw new Error('Erro ao gerar arquivo');
       const blob  = await res.blob();
       const a     = document.createElement('a');
       a.href      = URL.createObjectURL(blob);
-      a.download  = `${groupName.replace(/[^a-z0-9]/gi, '_')}_${new Date().toISOString().slice(0,10)}.csv`;
+      a.download  = `${groupName.replace(/[^a-z0-9]/gi, '_')}_${new Date().toISOString().slice(0,10)}.${exportFormat}`;
       a.click();
       URL.revokeObjectURL(a.href);
       setSuccess(`✅ Arquivo baixado com sucesso!`);
@@ -223,6 +224,22 @@ const GroupToXlsxExporter: React.FC = () => {
             </div>
           </div>
 
+          {/* Formato de exportação */}
+          <div className="bg-[#060b16] border border-white/5 rounded-xl p-5 mb-4">
+            <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3">Formato do arquivo</p>
+            <div className="flex gap-3">
+              {(['csv', 'xlsx'] as const).map(fmt => (
+                <button key={fmt} onClick={() => setExportFormat(fmt)}
+                  className={`flex-1 py-3 rounded-xl border-2 font-black text-sm uppercase transition-all ${exportFormat === fmt ? 'border-emerald-500 bg-emerald-500/10 text-emerald-400' : 'border-white/10 bg-transparent text-slate-400 hover:border-white/20'}`}>
+                  .{fmt.toUpperCase()}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-slate-600 mt-2">
+              {exportFormat === 'csv' ? 'Arquivo texto, abre em qualquer editor' : 'Planilha Excel (.xlsx)'}
+            </p>
+          </div>
+
           {/* Filtro excluir admins */}
           <div className="bg-[#060b16] border border-white/5 rounded-xl p-5 mb-6">
             <label className="flex items-center gap-4 cursor-pointer">
@@ -250,7 +267,7 @@ const GroupToXlsxExporter: React.FC = () => {
               className="flex-1 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-white px-6 py-4 rounded-xl font-black text-sm uppercase flex items-center justify-center gap-3 shadow-lg shadow-emerald-500/30 active:scale-95 transition-all">
               {exporting
                 ? <><Loader2 size={16} className="animate-spin" /> Gerando arquivo...</>
-                : <><Download size={16} /> Baixar Lista ({groupCount} contatos)</>
+                : <><Download size={16} /> Baixar {exportFormat.toUpperCase()} ({groupCount} contatos)</>
               }
             </button>
           </div>

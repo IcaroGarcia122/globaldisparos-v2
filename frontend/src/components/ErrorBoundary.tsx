@@ -46,6 +46,12 @@ export class ErrorBoundary extends React.Component<Props, State> {
               <p className="text-red-700 text-xs mt-2 mb-3">
                 Tente recarregar a página ou verifique se o backend está rodando.
               </p>
+              <button
+                onClick={() => window.location.reload()}
+                className="mt-1 mb-3 px-4 py-2 bg-red-600 text-white text-xs font-bold rounded hover:bg-red-700 transition-colors"
+              >
+                Recarregar Página
+              </button>
               {this.state.componentStack && (
                 <details className="mt-2">
                   <summary className="text-red-600 text-xs cursor-pointer font-bold">Ver detalhes técnicos</summary>

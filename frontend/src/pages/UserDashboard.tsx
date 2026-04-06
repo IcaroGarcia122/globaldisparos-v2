@@ -11,6 +11,7 @@ import GoalsTracker from '@/components/GoalsTracker';
 import InstanceManager from './InstanceManager';
 import { fetchAPI } from '@/config/api';
 import { useBackendAuth } from '@/hooks/useBackendAuth';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import {
   LayoutGrid, Send, Users, Clock, MessageSquare, Flame, Star, Plus, Zap, Shield, Play,
   ChevronRight, Download, Search, RefreshCw, Upload, ChevronDown, BarChart3,
@@ -802,12 +803,20 @@ const UserDashboard: React.FC = () => {
         <div className="max-w-7xl mx-auto">
           {/* EliteDispatcher permanece montado para não perder estado de campanha em andamento */}
           <div style={{ display: activeTab === 'disparo' ? 'block' : 'none' }}>
-            <EliteDispatcher />
+            <ErrorBoundary>
+              <EliteDispatcher />
+            </ErrorBoundary>
           </div>
           <div style={{ display: activeTab === 'aquecimento' ? 'block' : 'none' }}>
-            <WarmupCloud />
+            <ErrorBoundary>
+              <WarmupCloud />
+            </ErrorBoundary>
           </div>
-          {activeTab !== 'disparo' && activeTab !== 'aquecimento' && renderContent()}
+          {activeTab !== 'disparo' && activeTab !== 'aquecimento' && (
+            <ErrorBoundary>
+              {renderContent()}
+            </ErrorBoundary>
+          )}
         </div>
       </main>
     </div>
