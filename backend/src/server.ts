@@ -101,34 +101,15 @@ async function start() {
     logger.warn(`[Seed] ${err.message}`);
   }
 
-  // 4a. Limpar LID JIDs (@lid) armazenados como números de telefone em participantsList
-  // LIDs são identificadores internos do WhatsApp (14-15 dígitos), não números reais.
-  // Este cleanup roda uma vez no startup para corrigir dados sujos já gravados no banco.
+  // 4a. Limpar participantsList do banco — força re-fetch da Evolution com dados corretos.
+  // Garante que getParticipants sempre busca números frescos via findParticipants endpoint
+  // em vez de retornar LIDs ou números mal formatados salvos em syncs anteriores.
   (async () => {
     try {
-      const groups = await prisma.whatsAppGroup.findMany({
-        select: { id: true, participantsList: true },
-        where: { participantsList: { not: undefined } },
-      });
-      let cleaned = 0;
-      for (const g of groups) {
-        const pl = g.participantsList as any;
-        if (!pl?.participants?.length) continue;
-        const before = pl.participants.length;
-        const isLid = (p: string) => String(p).replace(/\D/g, '').length >= 14;
-        const participants = (pl.participants as string[]).filter(p => !isLid(p));
-        const admins = ((pl.admins || []) as string[]).filter(p => !isLid(p));
-        if (participants.length < before) {
-          await prisma.whatsAppGroup.update({
-            where: { id: g.id },
-            data: { participantsList: { participants, admins } as any },
-          }).catch(() => {});
-          cleaned++;
-        }
-      }
-      if (cleaned > 0) logger.info(`[Startup] LID cleanup: ${cleaned} grupo(s) corrigidos`);
+      await (prisma as any).$executeRaw`UPDATE whatsapp_groups SET "participantsList" = NULL, "participantsSyncedAt" = NULL WHERE "participantsList" IS NOT NULL`;
+      logger.info(`[Startup] participantsList limpos — próximo disparo buscará dados frescos da Evolution`);
     } catch (err: any) {
-      logger.warn(`[Startup] LID cleanup erro: ${err.message}`);
+      logger.warn(`[Startup] Cleanup participantsList erro: ${err.message}`);
     }
   })();
 
