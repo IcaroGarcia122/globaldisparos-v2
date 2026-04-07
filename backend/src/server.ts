@@ -147,7 +147,7 @@ async function start() {
             const owner = (evI.ownerJid || evI.owner || '').replace('@s.whatsapp.net','').replace('@c.us','').replace(/\D/g,'');
             if (owner.length >= 8 && owner.endsWith(phoneSuffix)) {
               // Só aceita nomes válidos da Evolution (pelo menos 2 chars alfanuméricos)
-              if (evN && evN.length > 2 && /[a-zA-Z0-9]/.test(evN) && !/^[.\s_-]+$/.test(evN)) {
+              if (evN && /[a-zA-Z0-9]/.test(evN)) {
                 evName = evN;
                 evInst = evI;
                 await prisma.whatsAppInstance.update({ where: { id: dbInst.id }, data: { name: evN } });
@@ -168,7 +168,7 @@ async function start() {
         }
 
         // Pular instâncias com nomes inválidos (sem caractere alfanumérico, muito curtos, etc.)
-        if (!evName || evName.length <= 2 || !/[a-zA-Z0-9]/.test(evName) || /^[.\s_-]+$/.test(evName)) {
+        if (!evName || !/[a-zA-Z0-9]/.test(evName)) {
           logger.warn(`[Startup] Nome inválido ignorado: "${evName}" (instância ${dbInst.id}) — recrie a instância na Evolution com um nome válido`);
           continue;
         }
@@ -238,7 +238,7 @@ async function start() {
         const { emitToUser } = await import('./sockets/socket.server');
         for (const inst of dbConnected) {
           // Pular instâncias com nome inválido — getInstanceState falharia com 404
-          const validName = inst.name && inst.name.length > 2 && /[a-zA-Z0-9]/.test(inst.name) && !/^[.\s_-]+$/.test(inst.name);
+          const validName = inst.name && /[a-zA-Z0-9]/.test(inst.name);
           if (!validName) {
             logger.warn(`[Cron] Instância ${inst.id} com nome inválido "${inst.name}" — verifique no painel Evolution`);
             continue;
@@ -287,11 +287,11 @@ async function start() {
           });
           dbInst = candidates.find(c => {
             const n = c.name || '';
-            return n.length <= 2 || !/[a-zA-Z0-9]/.test(n) || /^[.\s_-]+$/.test(n) || /^instance_\d+$/.test(n);
+            return !/[a-zA-Z0-9]/.test(n) || /^instance_\d+$/.test(n);
           }) || null;
 
           // Se achou e o nome da Evolution é válido, corrige o banco
-          if (dbInst && name.length > 2 && /[a-zA-Z0-9]/.test(name) && !/^[.\s_-]+$/.test(name)) {
+          if (dbInst && /[a-zA-Z0-9]/.test(name)) {
             await prisma.whatsAppInstance.update({ where: { id: dbInst.id }, data: { name } });
             logger.info(`[Sync] Auto-corrigido nome da instância ${dbInst.id}: "${dbInst.name}" → "${name}"`);
             dbInst = { ...dbInst, name };

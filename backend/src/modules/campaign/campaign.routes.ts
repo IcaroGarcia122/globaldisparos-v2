@@ -20,11 +20,8 @@ async function getEvolutionName(instanceId: number | string): Promise<string> {
 
   const name = inst.name || `instance_${id}`;
 
-  // Detecta nomes inválidos: padrão antigo "instance_N", nome muito curto, só pontos/espaços, etc.
-  const isInvalidName = /^instance_\d+$/.test(name)
-    || name.length <= 2
-    || /^[.\s_-]+$/.test(name)
-    || !name.match(/[a-zA-Z0-9]/);
+  // Detecta nomes inválidos: padrão antigo "instance_N" ou sem nenhum char alfanumérico (ex: ".", " ")
+  const isInvalidName = /^instance_\d+$/.test(name) || !/[a-zA-Z0-9]/.test(name);
 
   // Se nome inválido E temos número de telefone → buscar nome real na Evolution via phoneNumber
   if (isInvalidName && inst.phoneNumber) {
@@ -39,7 +36,7 @@ async function getEvolutionName(instanceId: number | string): Promise<string> {
         return ownerClean.length >= 8 && cleanPhone.endsWith(ownerClean.slice(-8));
       });
       // Só aceita nome válido: pelo menos 2 chars alfanuméricos
-      const isValidEvName = (n: string) => n && n.length > 2 && /[a-zA-Z0-9]/.test(n) && !/^[.\s_-]+$/.test(n);
+      const isValidEvName = (n: string) => !!(n && /[a-zA-Z0-9]/.test(n));
       if (match?.instanceName && isValidEvName(match.instanceName)) {
         // Atualizar nome no banco para futuras chamadas
         await prisma.whatsAppInstance.update({ where: { id }, data: { name: match.instanceName } }).catch(() => {});
@@ -275,7 +272,7 @@ router.post('/iniciar', async (req: AuthRequest, res: Response) => {
 
     // Verificar nome real da instância na Evolution ANTES de iniciar (evita 404 por nome inválido)
     const resolvedName = await getEvolutionName(instanceId);
-    const isValidInstanceName = resolvedName && resolvedName.length > 2 && /[a-zA-Z0-9]/.test(resolvedName) && !/^[.\s_-]+$/.test(resolvedName);
+    const isValidInstanceName = resolvedName && /[a-zA-Z0-9]/.test(resolvedName);
     if (!isValidInstanceName) {
       logger.error(`[Campaign] Nome inválido para instância ${instanceId}: "${resolvedName}". Reconfigure a instância na Evolution API.`);
       return res.status(409).json({ error: `Configuração inválida da instância "${instance.name}". Acesse Instâncias → Reconectar para corrigir.` });
