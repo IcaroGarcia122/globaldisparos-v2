@@ -20,21 +20,38 @@ async function getEvolutionName(instanceId: number | string): Promise<string> {
 
   const name = inst.name || `instance_${id}`;
 
-  // Se o nome segue o padrão antigo "instance_N", verificar se a Evolution
-  // conhece esse nome — se não, tentar buscar pelo phoneNumber
-  if (/^instance_\d+$/.test(name) && inst.phoneNumber) {
+  // Detecta nomes inválidos: padrão antigo "instance_N", nome muito curto, só pontos/espaços, etc.
+  const isInvalidName = /^instance_\d+$/.test(name)
+    || name.length <= 2
+    || /^[.\s_-]+$/.test(name)
+    || !name.match(/[a-zA-Z0-9]/);
+
+  // Se nome inválido E temos número de telefone → buscar nome real na Evolution via phoneNumber
+  if (isInvalidName && inst.phoneNumber) {
     try {
       const { default: ws } = await import('../../services/whatsapp.service');
       const all = await ws.fetchInstances().catch(() => []);
+      const cleanPhone = inst.phoneNumber.replace(/\D/g, '');
       const match = all.find((i: any) => {
-        const owner = (i.ownerJid || i.owner || '').replace('@s.whatsapp.net','').replace('@c.us','');
-        return owner === inst.phoneNumber?.replace(/\D/g,'');
+        const owner = (i.ownerJid || i.owner || i.owner_jid || '').replace('@s.whatsapp.net','').replace('@c.us','');
+        const ownerClean = owner.replace(/\D/g,'');
+        // Compara pelo sufixo (últimos 8 dígitos) para ignorar variações de código de país
+        return ownerClean.length >= 8 && cleanPhone.endsWith(ownerClean.slice(-8));
       });
-      if (match?.instanceName && match.instanceName !== name) {
+      // Só aceita nome válido: pelo menos 2 chars alfanuméricos
+      const isValidEvName = (n: string) => n && n.length > 2 && /[a-zA-Z0-9]/.test(n) && !/^[.\s_-]+$/.test(n);
+      if (match?.instanceName && isValidEvName(match.instanceName)) {
         // Atualizar nome no banco para futuras chamadas
         await prisma.whatsAppInstance.update({ where: { id }, data: { name: match.instanceName } }).catch(() => {});
         logger.info(`[Campaign] Corrigindo nome da instância ${id}: "${name}" → "${match.instanceName}"`);
         return match.instanceName;
+      }
+      // Fallback: buscar pelo nome direto na lista de instâncias da Evolution
+      const byName = all.find((i: any) => i.instanceName && isValidEvName(i.instanceName) && i.instanceName !== name);
+      if (all.length === 1 && byName?.instanceName) {
+        await prisma.whatsAppInstance.update({ where: { id }, data: { name: byName.instanceName } }).catch(() => {});
+        logger.info(`[Campaign] Corrigindo nome único da instância ${id}: "${name}" → "${byName.instanceName}"`);
+        return byName.instanceName;
       }
     } catch { /* silencioso */ }
   }
@@ -255,6 +272,14 @@ router.post('/iniciar', async (req: AuthRequest, res: Response) => {
     if (!instance) return res.status(404).json({ error: 'Instância não encontrada' });
     if (instance.userId !== userId) return res.status(403).json({ error: 'Acesso negado' });
     if (instance.status !== 'connected') return res.status(409).json({ error: 'Instância não está conectada' });
+
+    // Verificar nome real da instância na Evolution ANTES de iniciar (evita 404 por nome inválido)
+    const resolvedName = await getEvolutionName(instanceId);
+    const isValidInstanceName = resolvedName && resolvedName.length > 2 && /[a-zA-Z0-9]/.test(resolvedName) && !/^[.\s_-]+$/.test(resolvedName);
+    if (!isValidInstanceName) {
+      logger.error(`[Campaign] Nome inválido para instância ${instanceId}: "${resolvedName}". Reconfigure a instância na Evolution API.`);
+      return res.status(409).json({ error: `Configuração inválida da instância "${instance.name}". Acesse Instâncias → Reconectar para corrigir.` });
+    }
 
     // Coleta contatos — de grupos OU de lista xlsx
     const allContacts = new Map<string, { number: string; name?: string }>();
