@@ -138,21 +138,17 @@ async function start() {
         let evName = dbInst.name || `instance_${dbInst.id}`;
         let evInst = evolutionMap.get(evName);
 
-        // Se não encontrou pelo nome, tentar pelo phoneNumber (corrige qualquer nome inválido:
-        // ".", "instance_N", nomes muito curtos, etc.)
-        if (!evInst && dbInst.phoneNumber) {
+        // Se não encontrou e o nome é padrão "instance_N", tentar achar pelo phoneNumber
+        if (!evInst && dbInst.phoneNumber && /^instance_\d+$/.test(evName)) {
           const phoneClean = dbInst.phoneNumber.replace(/\D/g, '');
-          const phoneSuffix = phoneClean.slice(-8);
           for (const [evN, evI] of evolutionMap) {
-            const owner = (evI.ownerJid || evI.owner || '').replace('@s.whatsapp.net','').replace('@c.us','').replace(/\D/g,'');
-            if (owner.length >= 8 && owner.endsWith(phoneSuffix)) {
-              // Só aceita nomes válidos da Evolution (pelo menos 2 chars alfanuméricos)
-              if (evN && /[a-zA-Z0-9]/.test(evN)) {
-                evName = evN;
-                evInst = evI;
-                await prisma.whatsAppInstance.update({ where: { id: dbInst.id }, data: { name: evN } });
-                logger.info(`[Startup] Auto-corrigido nome da instância ${dbInst.id}: "${dbInst.name}" → "${evN}"`);
-              }
+            const owner = (evI.ownerJid || evI.owner || '').replace('@s.whatsapp.net','').replace('@c.us','');
+            if (owner === phoneClean) {
+              evName = evN;
+              evInst = evI;
+              // Atualizar nome no banco
+              await prisma.whatsAppInstance.update({ where: { id: dbInst.id }, data: { name: evN } });
+              logger.info(`[Startup] Auto-corrigido nome da instância ${dbInst.id}: "${dbInst.name}" → "${evN}"`);
               break;
             }
           }
@@ -167,9 +163,9 @@ async function start() {
           continue;
         }
 
-        // Pular instâncias com nomes inválidos (sem caractere alfanumérico, muito curtos, etc.)
-        if (!evName || !/[a-zA-Z0-9]/.test(evName)) {
-          logger.warn(`[Startup] Nome inválido ignorado: "${evName}" (instância ${dbInst.id}) — recrie a instância na Evolution com um nome válido`);
+        // Pular instâncias com nomes inválidos
+        if (!evName || evName === '.' || evName.includes('/')) {
+          logger.warn(`[Startup] Nome inválido ignorado: ${evName}`);
           continue;
         }
         // Registra webhook com delay para não sobrecarregar Evolution
@@ -237,12 +233,6 @@ async function start() {
         const wha = (await import('./services/whatsapp.service')).default;
         const { emitToUser } = await import('./sockets/socket.server');
         for (const inst of dbConnected) {
-          // Pular instâncias com nome inválido — getInstanceState falharia com 404
-          const validName = inst.name && /[a-zA-Z0-9]/.test(inst.name);
-          if (!validName) {
-            logger.warn(`[Cron] Instância ${inst.id} com nome inválido "${inst.name}" — verifique no painel Evolution`);
-            continue;
-          }
           try {
             const state = await wha.getInstanceState(inst.name);
             if (state === 'close') {
@@ -274,34 +264,14 @@ async function start() {
         const evStatus = evInst.status; // 'connected' | 'disconnected' | 'connecting'
         if (!name) continue;
 
-        const owner = (evInst.ownerJid || evInst.owner || '').replace('@s.whatsapp.net','').replace('@c.us','').replace(/\D/g,'');
-        const phoneSuffix = owner.slice(-8);
-
-        // Busca instância no banco: primeiro pelo nome, depois pelo telefone (para corrigir nomes errados)
-        let dbInst = await prisma.whatsAppInstance.findFirst({ where: { name, isActive: true } });
-
-        if (!dbInst && phoneSuffix.length === 8) {
-          // Tenta achar pelo número de telefone (para instâncias com nome inválido no banco)
-          const candidates = await prisma.whatsAppInstance.findMany({
-            where: { isActive: true, phoneNumber: { endsWith: phoneSuffix } },
-          });
-          dbInst = candidates.find(c => {
-            const n = c.name || '';
-            return !/[a-zA-Z0-9]/.test(n) || /^instance_\d+$/.test(n);
-          }) || null;
-
-          // Se achou e o nome da Evolution é válido, corrige o banco
-          if (dbInst && /[a-zA-Z0-9]/.test(name)) {
-            await prisma.whatsAppInstance.update({ where: { id: dbInst.id }, data: { name } });
-            logger.info(`[Sync] Auto-corrigido nome da instância ${dbInst.id}: "${dbInst.name}" → "${name}"`);
-            dbInst = { ...dbInst, name };
-          }
-        }
-
+        const dbInst = await prisma.whatsAppInstance.findFirst({
+          where: { name, isActive: true }
+        });
         if (!dbInst) continue;
 
         if (evStatus === 'connected' && dbInst.status !== 'connected') {
-          const phone = owner || dbInst.phoneNumber || '';
+          const owner = evInst.ownerJid || evInst.owner || '';
+          const phone = owner.replace('@s.whatsapp.net','').replace('@c.us','') || dbInst.phoneNumber;
           await prisma.whatsAppInstance.update({
             where: { id: dbInst.id },
             data: { status: 'connected', qrCode: null, connectedAt: dbInst.connectedAt || new Date(), ...(phone ? { phoneNumber: phone } : {}) }

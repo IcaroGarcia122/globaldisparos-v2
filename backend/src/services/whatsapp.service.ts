@@ -155,23 +155,14 @@ class WhatsAppService {
   // ─── MENSAGENS ───────────────────────────────────────────────────────────────
 
   async sendText(instanceName: string, number: string, text: string): Promise<any> {
-    // Normaliza número para formato WhatsApp
+    // Normaliza número para formato WhatsApp brasileiro
     let phone = number.replace(/\D/g, '');
-
-    // Remove prefixo 55 redundante (ex: 5555XXXXXXXXX → 55XXXXXXXXX)
-    if (phone.startsWith('55') && phone.length > 13) phone = phone.slice(2);
-    // Remove prefixo 55 para reprocessar como número local
+    // Remove 55 do início se tiver para reprocessar
     if (phone.startsWith('55') && phone.length > 11) phone = phone.slice(2);
-    // Adiciona 9 em número fixo BR (10 dígitos: DDD + 8)
+    // Adiciona 9 se for fixo (10 dígitos) 
     if (phone.length === 10) phone = phone.slice(0, 2) + '9' + phone.slice(2);
-    // Adiciona código do país 55 se for número local (11 dígitos: DDD + 9 + 8)
+    // Adiciona 55 se não tiver
     if (phone.length === 11) phone = '55' + phone;
-
-    // Valida: número deve ter entre 10 e 15 dígitos após normalização
-    if (phone.length < 10 || phone.length > 15) {
-      throw new Error(`Número inválido: ${number} (normalizado: ${phone})`);
-    }
-
     const res = await this.client.post(`/message/sendText/${instanceName}`, {
       number: phone,
       text,
