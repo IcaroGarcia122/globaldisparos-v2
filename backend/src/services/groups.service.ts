@@ -269,17 +269,28 @@ export async function getParticipants(instanceId: number, groupJid: string) {
 
   const cached = row?.participantsList as any;
   if (cached?.participants?.length > 0) {
+    // Filtra LID JIDs (@lid) que podem ter sido armazenados como números antes da correção.
+    // LID são identificadores internos do WhatsApp (14-15 dígitos), não números de telefone.
+    // Números de telefone reais via E.164 chegam do JID @s.whatsapp.net e têm ≤ 13 dígitos.
+    const isLid = (p: string) => p.replace(/\D/g, '').length >= 14;
+    const cleanParticipants = (cached.participants as string[]).filter(p => !isLid(p));
+    const cleanAdmins = ((cached.admins || []) as string[]).filter(p => !isLid(p));
+    const removed = cached.participants.length - cleanParticipants.length;
+
     const age = row?.participantsSyncedAt
       ? Date.now() - new Date(row.participantsSyncedAt).getTime()
       : Infinity;
     const ageHours = Math.round(age / 3600000);
     const isStale = age > CACHE_MAX_AGE_MS;
 
-    logger.info(`[Groups] ${cached.participants.length} participantes do banco (${isStale ? 'desatualizado' : `atualizado há ${ageHours}h`}) para ${groupJid}`);
+    if (removed > 0) {
+      logger.info(`[Groups] Removidos ${removed} LID(s) da lista em cache para ${groupJid}`);
+    }
+    logger.info(`[Groups] ${cleanParticipants.length} participantes do banco (${isStale ? 'desatualizado' : `atualizado há ${ageHours}h`}) para ${groupJid}`);
     return {
-      participants: cached.participants as string[],
-      admins: (cached.admins || []) as string[],
-      total: cached.participants.length,
+      participants: cleanParticipants,
+      admins: cleanAdmins,
+      total: cleanParticipants.length,
       source: isStale ? 'db_stale' : 'db_cache',
       cachedAt: row?.participantsSyncedAt,
     };
