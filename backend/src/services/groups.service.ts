@@ -206,8 +206,9 @@ export async function syncAllParticipants(instanceId: number, instanceName: stri
 
       for (const p of g.participants) {
         const jid: string = p.id || p.jid || p.phoneNumber || '';
+        if (jid.endsWith('@lid') || jid.includes('@g.us')) continue; // LID = linked device, não é número real
         const phone = jid.replace('@s.whatsapp.net', '').replace('@c.us', '').replace(/\D/g, '');
-        if (!phone || phone.length < 8) continue;
+        if (!phone || phone.length < 8 || phone.includes('@')) continue;
         participants.push(phone);
         if (p.admin === 'admin' || p.admin === 'superadmin' || p.isAdmin) admins.push(phone);
       }
