@@ -45,9 +45,7 @@ function setupSocketServer(server) {
     io.on('connection', (socket) => {
         const userId = socket.data.userId;
         if (userId) {
-            // Registra em ambos os formatos que o frontend usa
             socket.join(`user:${userId}`);
-            socket.join(`user-${userId}`);
             logger_1.default.info(`[Socket] User ${userId} conectado: ${socket.id}`);
         }
         socket.on('join', (room) => {
@@ -69,7 +67,7 @@ function getIO() {
 function emitToUser(userId, event, data) {
     if (!io)
         return;
-    io.to(`user:${userId}`).to(`user-${userId}`).emit(event, data);
+    io.to(`user:${userId}`).emit(event, data);
 }
 /** Emite evento para uma sala de campanha */
 function emitToCampaign(campaignId, event, data) {

@@ -71,26 +71,8 @@ const server = http_1.default.createServer(app);
 app.use((0, helmet_1.default)({ contentSecurityPolicy: false }));
 // Cloudflare e Nginx enviam X-Forwarded-For — necessário para rate limiting correto
 app.set('trust proxy', 1);
-const allowedOrigins = [
-    process.env.FRONTEND_URL || 'http://localhost:5173',
-    'http://localhost:5173',
-    'http://localhost:3000',
-];
-// Aceita também www. prefixado
-if (process.env.FRONTEND_URL) {
-    const u = process.env.FRONTEND_URL;
-    if (!u.includes('www.'))
-        allowedOrigins.push(u.replace('https://', 'https://www.'));
-}
 app.use((0, cors_1.default)({
-    origin: (origin, cb) => {
-        // Permite requests sem origin (mobile, Postman, webhooks)
-        if (!origin)
-            return cb(null, true);
-        if (allowedOrigins.includes(origin))
-            return cb(null, true);
-        cb(null, true); // Em produção, pode restringir aqui se necessário
-    },
+    origin: true, // Permite qualquer origem — segurança feita via JWT em cada rota
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 }));
@@ -138,7 +120,7 @@ async function start() {
             await database_2.default.user.create({
                 data: { email: 'admin@gmail.com', password: hash, fullName: 'Administrador', role: 'admin', plan: 'enterprise', isActive: true },
             });
-            logger_1.default.info('[Seed] Admin criado: admin@gmail.com / vip2026');
+            logger_1.default.info('[Seed] Admin criado com sucesso');
         }
     }
     catch (err) {

@@ -275,10 +275,16 @@ export async function getParticipants(instanceId: number, groupJid: string) {
     const isStale = age > CACHE_MAX_AGE_MS;
 
     logger.info(`[Groups] ${cached.participants.length} participantes do banco (${isStale ? 'desatualizado' : `atualizado há ${ageHours}h`}) para ${groupJid}`);
+    // Filtrar LIDs (>=14 dígitos) e números inválidos do cache
+    const filteredParticipants = (cached.participants as string[]).filter((p: string) => {
+      const digits = p.replace(/\D/g, '');
+      return digits.length >= 10 && digits.length <= 13; // números reais BR: 12-13 dígitos com 55
+    });
+    logger.info(`[Groups] Filtrado: ${cached.participants.length} → ${filteredParticipants.length} (removidos ${cached.participants.length - filteredParticipants.length} LIDs)`);
     return {
-      participants: cached.participants as string[],
+      participants: filteredParticipants,
       admins: (cached.admins || []) as string[],
-      total: cached.participants.length,
+      total: filteredParticipants.length,
       source: isStale ? 'db_stale' : 'db_cache',
       cachedAt: row?.participantsSyncedAt,
     };

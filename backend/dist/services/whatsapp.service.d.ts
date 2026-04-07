@@ -34,7 +34,10 @@ declare class WhatsAppService {
         synced: number;
         failed: number;
     }>;
-    /** Retorna grupos onde a instância tem role de admin/superadmin */
+    /**
+     * Retorna grupos onde a instância tem role de admin ou superadmin.
+     * Tenta detectar via campo `participants` (se disponível) ou via campo `owner`.
+     */
     getGroupsWhereAdmin(instanceName: string, ownerPhoneFromDb?: string): Promise<Array<{
         groupId: string;
         name: string;

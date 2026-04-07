@@ -84,7 +84,6 @@ const upload = (0, multer_1.default)({ storage: multer_1.default.memoryStorage()
 // ─── Controle de campanhas em execução ────────────────────────────────────────
 // Map local para controle de pause/cancel em tempo real (dentro do processo)
 // O status canônico fica no banco — sobrevive a restarts
-const cancelledCampaigns = new Set();
 const runningCampaigns = new Map();
 // Ao iniciar o servidor, marcar como 'cancelled' campanhas que ficaram presas em 'running'
 // (isso acontece quando o processo é reiniciado com campanha em andamento)
@@ -114,7 +113,7 @@ function randomizeMessage(template, contact) {
     return msg + zwChar;
 }
 // ─── EXECUÇÃO DE CAMPANHA EM BACKGROUND ──────────────────────────────────────
-async function runCampaign(campaignId, instanceName, contacts, message, options, userId) {
+async function runCampaign(campaignId, instanceId, instanceName, contacts, message, options, userId) {
     const startTime = Date.now();
     let sent = 0, failed = 0;
     runningCampaigns.set(campaignId, { cancel: false, pause: false });
@@ -144,7 +143,7 @@ async function runCampaign(campaignId, instanceName, contacts, message, options,
             if (ctrl?.cancel)
                 break;
             // Checar status no banco (fonte de verdade — funciona mesmo após restart parcial)
-            const camp = await database_1.default.campaign.findUnique({ where: { id: campaignId }, select: { status: true } });
+            let camp = await database_1.default.campaign.findUnique({ where: { id: campaignId }, select: { status: true } });
             if (!camp || camp.status === 'cancelled')
                 break;
             // Aguarda se pausada (checa Map E banco)
@@ -160,6 +159,7 @@ async function runCampaign(campaignId, instanceName, contacts, message, options,
                         runningCampaigns.get(campaignId).pause = false;
                     break;
                 }
+                camp = recheck; // atualiza referência para próxima iteração do while
             }
             if (runningCampaigns.get(campaignId)?.cancel)
                 break;
@@ -176,16 +176,16 @@ async function runCampaign(campaignId, instanceName, contacts, message, options,
             try {
                 await whatsapp_service_1.default.sendText(instanceName, contact.number, finalMsg);
                 sent++;
-                await database_1.default.whatsAppInstance.updateMany({
-                    where: { name: instanceName },
+                await database_1.default.whatsAppInstance.update({
+                    where: { id: instanceId },
                     data: { totalMessagesSent: { increment: 1 }, dailyMessagesSent: { increment: 1 }, lastMessageAt: new Date() },
                 }).catch(() => { });
             }
             catch (err) {
                 failed++;
                 logger_1.default.warn(`[Campaign] Falha ${contact.number}: ${err.message}`);
-                await database_1.default.whatsAppInstance.updateMany({
-                    where: { name: instanceName },
+                await database_1.default.whatsAppInstance.update({
+                    where: { id: instanceId },
                     data: { totalMessagesFailed: { increment: 1 } },
                 }).catch(() => { });
             }
@@ -258,6 +258,8 @@ router.post('/iniciar', async (req, res) => {
         const instance = await database_1.default.whatsAppInstance.findUnique({ where: { id: parseInt(String(instanceId)) } });
         if (!instance)
             return res.status(404).json({ error: 'Instância não encontrada' });
+        if (instance.userId !== userId)
+            return res.status(403).json({ error: 'Acesso negado' });
         if (instance.status !== 'connected')
             return res.status(409).json({ error: 'Instância não está conectada' });
         // Coleta contatos — de grupos OU de lista xlsx
@@ -293,15 +295,7 @@ router.post('/iniciar', async (req, res) => {
         if (randomizeOrder) {
             contacts = contacts.sort(() => Math.random() - 0.5);
         }
-        // Excluir contatos que já receberam mensagem desta instância
-        if (skipAlreadySent) {
-            const recent = await database_1.default.campaign.findMany({
-                where: { instanceId: parseInt(String(instanceId)), status: 'completed', startedAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } },
-                select: { id: true }
-            });
-            // Por simplicidade, skipAlreadySent é respeitado via randomizeOrder por ora
-            // Para implementação completa precisaria de tabela de histórico de envios
-        }
+        // skipAlreadySent: requer tabela de histórico de envios — não implementado ainda
         const campaign = await database_1.default.campaign.create({
             data: {
                 userId, instanceId: parseInt(String(instanceId)),
@@ -323,7 +317,7 @@ router.post('/iniciar', async (req, res) => {
         const finalMessage = messageVariations.length > 1
             ? messageVariations[Math.floor(Math.random() * messageVariations.length)]
             : messageVariations[0] || message;
-        runCampaign(campaign.id, await getEvolutionName(instanceId), contacts, messageVariations.length > 1 ? messageVariations : finalMessage, { intervalMs: interval, randomizeInterval, randomizeMessage: doRandomize, excludeAdmins, adminNumbers: Array.from(allAdmins) }, userId);
+        runCampaign(campaign.id, parseInt(String(instanceId)), await getEvolutionName(instanceId), contacts, messageVariations.length > 1 ? messageVariations : finalMessage, { intervalMs: interval, randomizeInterval, randomizeMessage: doRandomize, excludeAdmins, adminNumbers: Array.from(allAdmins) }, userId);
     }
     catch (err) {
         logger_1.default.error(`[Campaign] Erro ao iniciar: ${err.message}`);
@@ -339,6 +333,8 @@ router.post('/send-single', async (req, res) => {
         const instance = await database_1.default.whatsAppInstance.findUnique({ where: { id: parseInt(String(instanceId)) } });
         if (!instance)
             return res.status(404).json({ error: 'Instância não encontrada' });
+        if (instance.userId !== req.user.id)
+            return res.status(403).json({ error: 'Acesso negado' });
         if (instance.status !== 'connected')
             return res.status(400).json({ error: 'Instância não conectada' });
         let sendSuccess = false;
@@ -385,7 +381,11 @@ router.post('/enviar-xlsx', upload.single('file'), async (req, res) => {
         if (!instanceId || !message)
             return res.status(400).json({ error: 'instanceId e message obrigatórios' });
         const instance = await database_1.default.whatsAppInstance.findUnique({ where: { id: parseInt(instanceId) } });
-        if (!instance || instance.status !== 'connected')
+        if (!instance)
+            return res.status(404).json({ error: 'Instância não encontrada' });
+        if (instance.userId !== userId)
+            return res.status(403).json({ error: 'Acesso negado' });
+        if (instance.status !== 'connected')
             return res.status(409).json({ error: 'Instância não conectada' });
         const wb = xlsx_1.default.read(req.file.buffer, { type: 'buffer' });
         const ws = wb.Sheets[wb.SheetNames[0]];
@@ -411,7 +411,7 @@ router.post('/enviar-xlsx', upload.single('file'), async (req, res) => {
         });
         res.status(201).json({ campaignId: campaign.id, totalContacts: contacts.length });
         const evNameRun = await getEvolutionName(instanceId);
-        runCampaign(campaign.id, evNameRun, contacts, message, { intervalMs: parseInt(interval), randomizeInterval: Boolean(randomizeInterval), randomizeMessage: Boolean(doRandomize), excludeAdmins: false }, userId);
+        runCampaign(campaign.id, parseInt(instanceId), evNameRun, contacts, message, { intervalMs: parseInt(interval), randomizeInterval: Boolean(randomizeInterval), randomizeMessage: Boolean(doRandomize), excludeAdmins: false }, userId);
     }
     catch (err) {
         return res.status(500).json({ error: err.message });
@@ -627,15 +627,15 @@ router.post('/cancelar/:campaignId', async (req, res) => {
         const userId = req.user.id;
         if (isNaN(campaignId))
             return res.status(400).json({ error: 'campaignId inválido' });
-        // Registrar como cancelada para parar o loop de envio
-        cancelledCampaigns.add(campaignId);
+        // Para loop de envio backend (se rodando via runCampaign)
+        const ctrl = runningCampaigns.get(campaignId);
+        if (ctrl)
+            ctrl.cancel = true;
         // Atualizar status no banco
         await database_1.default.campaign.updateMany({
             where: { id: campaignId, userId },
             data: { status: 'cancelled', completedAt: new Date() },
         }).catch(() => { });
-        // Limpar da memória após 30s
-        setTimeout(() => cancelledCampaigns.delete(campaignId), 30000);
         logger_1.default.info(`[Campaign] Campanha ${campaignId} cancelada pelo usuário ${userId}`);
         return res.json({ success: true, campaignId });
     }

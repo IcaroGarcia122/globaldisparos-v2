@@ -50,6 +50,13 @@ router.get('/', auth_middleware_1.authenticate, async (req, res) => {
         return res.status(400).json({ error: 'instanceId obrigatório' });
     const { groups, source } = await (0, groups_service_1.getGroups)(instanceId);
     if (groups.length > 0) {
+        // Retorna cache imediatamente, mas dispara sync em background para pegar grupos novos
+        const instance = await database_1.default.whatsAppInstance.findUnique({
+            where: { id: instanceId }, select: { status: true },
+        }).catch(() => null);
+        if (instance?.status === 'connected' && !(0, groups_service_1.isSyncing)(instanceId)) {
+            (0, groups_service_1.syncGroupsBackground)(instanceId).catch(() => { });
+        }
         return res.json({ groups, loading: false, total: groups.length, source });
     }
     const instance = await database_1.default.whatsAppInstance.findUnique({
@@ -120,53 +127,55 @@ router.get('/participants/:instanceId/:groupId', auth_middleware_1.authenticate,
         return res.status(500).json({ error: err.message });
     }
 });
-/** GET /api/groups/:groupId/participants */
-/** GET /api/groups/admin-only/:instanceId — grupos onde a instância é admin */
+/** GET /api/groups/admin-only/:instanceId — grupos onde a instância é admin/dono */
 router.get('/admin-only/:instanceId', auth_middleware_1.authenticate, async (req, res) => {
     const instanceId = parseInt(req.params.instanceId);
     try {
         const instance = await database_1.default.whatsAppInstance.findUnique({
             where: { id: instanceId },
-            select: { name: true, phoneNumber: true },
+            select: { name: true, phoneNumber: true, status: true },
         });
-        const ownerPhone = (instance?.phoneNumber || '').replace(/[^0-9]/g, '');
-        logger_1.default.info(`[AdminGroups] instanceId=${instanceId} phone="${ownerPhone}"`);
-        if (!ownerPhone) {
-            return res.status(400).json({ error: 'Número da instância não encontrado no banco' });
-        }
+        const instanceName = instance?.name || `instance_${instanceId}`;
+        const ownerPhone = (instance?.phoneNumber || '').replace(/\D/g, '');
         const suffix = ownerPhone.slice(-8);
-        // Buscar todos os grupos do banco que tenham participants_list com nosso número como admin
-        const allGroups = await database_1.default.whatsAppGroup.findMany({
+        // ── Sempre responde do banco (rápido) ─────────────────────────────────────
+        const dbGroups = await database_1.default.whatsAppGroup.findMany({
             where: { instanceId },
+            orderBy: { name: 'asc' },
             select: { groupId: true, name: true, participantsCount: true, participantsList: true },
         });
-        // Filtrar: grupos onde nosso phone está na lista de admins
-        const adminGroups = allGroups.filter(g => {
-            const pl = g.participantsList;
-            if (!pl)
-                return false;
-            const admins = pl.admins || [];
-            return admins.some((a) => a.replace(/[^0-9]/g, '').endsWith(suffix));
-        });
-        logger_1.default.info(`[AdminGroups] ${allGroups.length} grupos no banco → ${adminGroups.length} com participants_list onde é admin`);
-        if (adminGroups.length > 0) {
-            return res.json({
-                groups: adminGroups.map(g => ({ groupId: g.groupId, name: g.name, participantsCount: g.participantsCount })),
-                source: 'database_admins',
+        // Banco vazio → dispara sync e retorna vazio
+        if (dbGroups.length === 0) {
+            if (instance?.status === 'connected')
+                (0, groups_service_1.syncGroupsBackground)(instanceId).catch(() => { });
+            return res.json({ groups: [], warning: 'Sincronização iniciada. Recarregue em 30 segundos.' });
+        }
+        // Dispara sync de participantes em background (não bloqueia resposta)
+        if (instance?.status === 'connected') {
+            (0, groups_service_1.syncAllParticipants)(instanceId, instanceName).catch(() => { });
+        }
+        // Filtra por admin se tiver dados
+        if (ownerPhone) {
+            const adminGroups = dbGroups.filter(g => {
+                const pl = g.participantsList;
+                if (!pl?.admins?.length)
+                    return false;
+                return pl.admins.some((a) => a.replace(/\D/g, '').endsWith(suffix));
             });
+            if (adminGroups.length > 0) {
+                logger_1.default.info(`[AdminGroups] ${adminGroups.length}/${dbGroups.length} grupos onde ${ownerPhone} é admin`);
+                return res.json({
+                    groups: adminGroups.map(g => ({ groupId: g.groupId, name: g.name, participantsCount: g.participantsCount })),
+                    source: 'database_admins',
+                });
+            }
         }
-        // Se nenhum grupo tem participants_list ainda, tentar via Evolution
-        const instanceName = instance?.name || `instance_${instanceId}`;
-        const evolutionGroups = await whatsapp_service_1.default.getGroupsWhereAdmin(instanceName, ownerPhone).catch(() => []);
-        if (evolutionGroups.length > 0) {
-            return res.json({ groups: evolutionGroups, source: 'evolution' });
-        }
-        // Último fallback: todos os grupos com aviso
-        logger_1.default.warn(`[AdminGroups] Sem dados de admin — retornando todos os ${allGroups.length} grupos`);
+        // Sem dados de admin ainda — retorna todos com aviso
+        logger_1.default.info(`[AdminGroups] Sem dados de admin ainda — retornando ${dbGroups.length} grupos`);
         return res.json({
-            groups: allGroups.map(g => ({ groupId: g.groupId, name: g.name, participantsCount: g.participantsCount })),
+            groups: dbGroups.map(g => ({ groupId: g.groupId, name: g.name, participantsCount: g.participantsCount })),
             source: 'database_all',
-            warning: 'Atenção: somente criadores de grupo podem adicionar membros. Grupos onde você não é admin vão retornar erro.',
+            warning: 'Sincronizando dados de admin em background. Recarregue em 30 segundos.',
         });
     }
     catch (err) {
@@ -346,29 +355,32 @@ router.get('/export-xlsx/:instanceId/:groupId', auth_middleware_1.authenticate, 
     const { groupId } = req.params;
     const excludeAdmins = req.query.excludeAdmins === 'true';
     try {
+        // Usa getParticipants que busca do banco OU da Evolution automaticamente
         const result = await (0, groups_service_1.getParticipants)(instanceId, groupId);
-        const { participants, admins } = result;
+        const participants = result.participants || [];
+        const admins = result.admins || [];
+        // Nome do grupo para o filename
+        const row = await database_1.default.whatsAppGroup.findFirst({
+            where: { instanceId, groupId },
+            select: { name: true },
+        });
+        if (participants.length === 0) {
+            return res.status(404).json({
+                error: 'Não foi possível obter os participantes deste grupo. Verifique se a instância está conectada e tente novamente.',
+            });
+        }
         // Filtrar admins se solicitado
         const list = excludeAdmins
             ? participants.filter((p) => !admins.includes(p))
             : participants;
-        // Gerar XLSX manualmente (formato binário mínimo compatível com Excel)
-        // Usamos CSV com BOM UTF-8 que o Excel abre corretamente como "xlsx" alternativo
-        // Para XLSX real, gerar XML dentro de ZIP
         const rows = [['#', 'Telefone', 'Admin', 'Numero_Whatsapp']];
         list.forEach((phone, i) => {
             const isAdmin = admins.includes(phone) ? 'SIM' : 'NAO';
             rows.push([(i + 1).toString(), phone, isAdmin, `+${phone}`]);
         });
-        // CSV com BOM (Excel reconhece UTF-8)
         const bom = '\uFEFF';
         const csv = bom + rows.map(r => r.map(c => `"${c}"`).join(',')).join('\r\n');
-        // Buscar nome do grupo
-        const group = await database_1.default.whatsAppGroup.findFirst({
-            where: { groupId },
-            select: { name: true },
-        }).catch(() => null);
-        const groupName = (group?.name || groupId).replace(/[^a-zA-Z0-9_\-\u00C0-\u017F ]/g, '_').slice(0, 40);
+        const groupName = (row?.name || groupId).replace(/[^a-zA-Z0-9_\-\u00C0-\u017F ]/g, '_').slice(0, 40);
         const date = new Date().toISOString().split('T')[0];
         const filename = `contatos_${groupName}_${date}.csv`;
         res.setHeader('Content-Type', 'text/csv; charset=utf-8');

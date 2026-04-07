@@ -165,8 +165,15 @@ router.post('/:id/connect', async (req, res) => {
             (0, socket_server_1.emitToUser)(instance.userId, 'qr_code', { instanceId: id, qrCode });
         }
         else {
+            // Race condition fix: webhook may have saved QR to DB while this request was processing
+            const fresh = await database_1.default.whatsAppInstance.findUnique({ where: { id }, select: { qrCode: true } });
+            if (fresh?.qrCode) {
+                qrCode = fresh.qrCode;
+                logger_1.default.info(`[Instance] QR recuperado do banco (webhook adiantou a resposta) para ${evName}`);
+            }
             await database_1.default.whatsAppInstance.update({ where: { id }, data: { status: 'connecting' } });
-            logger_1.default.warn(`[Instance] QR não disponível para ${evName}`);
+            if (!qrCode)
+                logger_1.default.warn(`[Instance] QR não disponível para ${evName}`);
         }
         return res.json({ instanceId: id, qrCode, status: qrCode ? 'connecting' : 'pending' });
     }

@@ -329,15 +329,32 @@ router.post('/reset-password/:token', async (req, res) => {
     logger_1.default.info(`[Auth] Senha redefinida para user ${row.created_by}`);
     return res.json({ message: 'Senha redefinida com sucesso. Faça login.' });
 });
+/** POST /api/auth/validate-payment-ref — valida o ref da IronPay no servidor (ref nunca exposto no bundle) */
+router.post('/validate-payment-ref', async (req, res) => {
+    const { ref, plan } = req.body;
+    const expectedRef = process.env.PAYMENT_REF;
+    if (!expectedRef) {
+        logger_1.default.warn('[Payment] PAYMENT_REF não configurado no .env');
+        return res.status(503).json({ error: 'Configuração ausente' });
+    }
+    if (!ref || ref !== expectedRef) {
+        logger_1.default.warn('[Payment] Tentativa com ref inválido');
+        return res.status(403).json({ error: 'Acesso não autorizado' });
+    }
+    return res.json({ valid: true, plan: plan || 'mensal' });
+});
 /** POST /api/auth/payment-token — gera token de pagamento válido por 30min
- *  Chamado pelo webhook do Diggion/Ironpay após compra aprovada
- *  Ou pode ser chamado pelo admin para liberar acesso manual
+ *  Pode ser chamado pelo admin para liberar acesso manual ou por webhook de pagamento
  */
 router.post('/payment-token', async (req, res) => {
     const { plan, email, webhookSecret, transactionId } = req.body;
     // Validar secret do webhook (configurar no .env como WEBHOOK_SECRET)
     const expectedSecret = process.env.PAYMENT_WEBHOOK_SECRET;
-    if (expectedSecret && webhookSecret !== expectedSecret) {
+    if (!expectedSecret) {
+        logger_1.default.error('[Payment] PAYMENT_WEBHOOK_SECRET não configurado — endpoint bloqueado por segurança');
+        return res.status(503).json({ error: 'Serviço não configurado' });
+    }
+    if (webhookSecret !== expectedSecret) {
         logger_1.default.warn(`[Payment] Tentativa com secret inválido`);
         return res.status(403).json({ error: 'Acesso negado' });
     }

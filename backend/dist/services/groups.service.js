@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -6,6 +39,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.saveGroupsFromWebhook = saveGroupsFromWebhook;
 exports.getGroups = getGroups;
 exports.syncGroupsBackground = syncGroupsBackground;
+exports.syncAllParticipants = syncAllParticipants;
 exports.isSyncing = isSyncing;
 exports.getSyncProgress = getSyncProgress;
 exports.getParticipants = getParticipants;
@@ -16,6 +50,7 @@ const logger_1 = __importDefault(require("../utils/logger"));
 const CACHE_TTL = 5 * 60; // 5 min
 const syncRunning = new Set();
 const syncProgress = new Map();
+const participantSyncRunning = new Set();
 // ─── SALVAR GRUPOS (chamado pelo webhook GROUPS_UPSERT) ───────────────────────
 async function saveGroupsFromWebhook(instanceId, rawGroups) {
     if (!rawGroups?.length)
@@ -118,29 +153,26 @@ async function syncGroupsBackground(instanceId, delayMs = 0) {
             syncProgress.set(key, `aguardando ${delayMs / 1000}s...`);
             await new Promise(r => setTimeout(r, delayMs));
         }
-        // Se já temos grupos no banco E a instância está conectada, apenas limpar cache
-        const existing = await database_1.default.whatsAppGroup.count({ where: { instanceId } });
         const inst = await database_1.default.whatsAppInstance.findUnique({ where: { id: instanceId }, select: { status: true } });
-        if (existing > 0 && inst?.status !== 'connected') {
-            // Instância desconectada com grupos no banco — retornar cache sem tentar Evolution
-            logger_1.default.info(`[Groups] ${existing} grupos no banco (instância offline) — usando cache para ${instName}`);
+        if (inst?.status !== 'connected') {
+            // Instância offline — retorna o que tem no banco sem chamar Evolution
+            logger_1.default.info(`[Groups] Instância ${instName} offline — usando banco sem sync`);
             await redis_1.cache.del(`groups:${instanceId}`);
             return;
         }
-        if (existing > 0 && inst?.status === 'connected') {
-            // Instância conectada com grupos — verificar se precisa re-sync
-            logger_1.default.info(`[Groups] ${existing} grupos no banco para ${instName} — invalidando cache`);
-            await redis_1.cache.del(`groups:${instanceId}`);
-            // Continuar para tentar atualizar via Evolution
-        }
-        // Estratégia: findChats → JIDs dos grupos → findGroupInfos por lote
-        syncProgress.set(key, 'extraindo grupos via findChats...');
-        logger_1.default.info(`[Groups] Iniciando sync via findChats+findGroupInfos para ${instName}`);
+        // Instância conectada — sempre busca da Evolution para pegar grupos novos
+        await redis_1.cache.del(`groups:${instanceId}`);
+        syncProgress.set(key, 'buscando grupos na Evolution...');
+        logger_1.default.info(`[Groups] Sync via Evolution para ${instName}`);
         const raw = await whatsapp_service_1.default.fetchGroups(instName);
         if (raw.length > 0) {
             syncProgress.set(key, `salvando ${raw.length} grupos...`);
             const saved = await saveGroupsFromWebhook(instanceId, raw);
+            await redis_1.cache.del(`groups:${instanceId}`);
             logger_1.default.info(`[Groups] ✅ ${saved} grupos salvos para ${instName}`);
+            // Sync participantes em background para popular admins
+            syncAllParticipants(instanceId, instName).catch(() => { });
+            // Enriquece nomes em background
             whatsapp_service_1.default.enrichGroupNamesViaMessages(instName, instanceId, database_1.default)
                 .then(async () => {
                 await redis_1.cache.del(`groups:${instanceId}`);
@@ -150,15 +182,14 @@ async function syncGroupsBackground(instanceId, delayMs = 0) {
                 .catch((e) => logger_1.default.warn(`[Groups] enrichGroupNames erro: ${e.message}`));
             return;
         }
-        // Evolution sem grupos (sessão perdida ou offline)
-        // Verificar se temos grupos no banco de uma sessão anterior
-        const cached = await database_1.default.whatsAppGroup.count({ where: { instanceId } });
-        if (cached > 0) {
-            logger_1.default.info(`[Groups] Evolution sem dados — usando ${cached} grupos em cache do banco para ${instName}`);
+        // Evolution não retornou grupos — usar banco (pode ter grupos de sessão anterior)
+        const existing = await database_1.default.whatsAppGroup.count({ where: { instanceId } });
+        if (existing > 0) {
+            logger_1.default.info(`[Groups] Evolution sem dados — usando ${existing} grupos do banco para ${instName}`);
             await redis_1.cache.del(`groups:${instanceId}`);
             return;
         }
-        logger_1.default.warn(`[Groups] Nenhum grupo — Evolution offline e banco vazio para ${instName}. Reconecte o WhatsApp.`);
+        logger_1.default.warn(`[Groups] Nenhum grupo — Evolution sem dados e banco vazio para ${instName}`);
     }
     catch (err) {
         logger_1.default.error(`[Groups] Sync erro: ${err.message}`);
@@ -166,6 +197,56 @@ async function syncGroupsBackground(instanceId, delayMs = 0) {
     finally {
         syncRunning.delete(key);
         syncProgress.delete(key);
+    }
+}
+/**
+ * Sincroniza participantes de todos os grupos via UMA única chamada fetchAllGroups?getParticipants=true.
+ * Muito mais rápido que chamar grupo por grupo.
+ */
+async function syncAllParticipants(instanceId, instanceName) {
+    const key = String(instanceId);
+    if (participantSyncRunning.has(key))
+        return;
+    participantSyncRunning.add(key);
+    try {
+        logger_1.default.info(`[Groups] Sync participantes (bulk) para ${instanceName}`);
+        // Uma única chamada para todos os grupos com participantes
+        const axios = (await Promise.resolve().then(() => __importStar(require('axios')))).default;
+        const baseURL = (process.env.EVOLUTION_API_URL || 'http://127.0.0.1:8081').replace('localhost', '127.0.0.1');
+        const apiKey = process.env.EVOLUTION_API_KEY || '';
+        const res = await axios.get(`${baseURL}/group/fetchAllGroups/${instanceName}?getParticipants=true`, { headers: { apikey: apiKey }, timeout: 120000 });
+        const raw = Array.isArray(res.data) ? res.data : (res.data?.groups || res.data?.value || []);
+        const withParticipants = raw.filter((g) => (g.id || g.jid || '').includes('@g.us') && Array.isArray(g.participants) && g.participants.length > 0);
+        logger_1.default.info(`[Groups] ${withParticipants.length} grupos com participantes recebidos da Evolution`);
+        let synced = 0;
+        for (const g of withParticipants) {
+            const gid = g.id || g.jid;
+            const participants = [];
+            const admins = [];
+            for (const p of g.participants) {
+                const jid = p.id || p.jid || p.phoneNumber || '';
+                const phone = jid.replace('@s.whatsapp.net', '').replace('@c.us', '').replace(/\D/g, '');
+                if (!phone || phone.length < 8)
+                    continue;
+                participants.push(phone);
+                if (p.admin === 'admin' || p.admin === 'superadmin' || p.isAdmin)
+                    admins.push(phone);
+            }
+            if (!participants.length)
+                continue;
+            await database_1.default.whatsAppGroup.updateMany({
+                where: { instanceId, groupId: gid },
+                data: { participantsList: { participants, admins }, participantsCount: participants.length, participantsSyncedAt: new Date() },
+            }).catch(() => { });
+            synced++;
+        }
+        logger_1.default.info(`[Groups] ✅ Sync participantes concluído: ${synced} grupos atualizados para ${instanceName}`);
+    }
+    catch (err) {
+        logger_1.default.warn(`[Groups] Sync participantes erro: ${err.message}`);
+    }
+    finally {
+        participantSyncRunning.delete(key);
     }
 }
 function isSyncing(instanceId) {
@@ -211,10 +292,16 @@ async function getParticipants(instanceId, groupJid) {
         const ageHours = Math.round(age / 3600000);
         const isStale = age > CACHE_MAX_AGE_MS;
         logger_1.default.info(`[Groups] ${cached.participants.length} participantes do banco (${isStale ? 'desatualizado' : `atualizado há ${ageHours}h`}) para ${groupJid}`);
+        // Filtrar LIDs (>=14 dígitos) e números inválidos do cache
+        const filteredParticipants = cached.participants.filter((p) => {
+            const digits = p.replace(/\D/g, '');
+            return digits.length >= 10 && digits.length <= 13; // números reais BR: 12-13 dígitos com 55
+        });
+        logger_1.default.info(`[Groups] Filtrado: ${cached.participants.length} → ${filteredParticipants.length} (removidos ${cached.participants.length - filteredParticipants.length} LIDs)`);
         return {
-            participants: cached.participants,
+            participants: filteredParticipants,
             admins: (cached.admins || []),
-            total: cached.participants.length,
+            total: filteredParticipants.length,
             source: isStale ? 'db_stale' : 'db_cache',
             cachedAt: row?.participantsSyncedAt,
         };
