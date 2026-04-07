@@ -106,7 +106,7 @@ async function start() {
   // em vez de retornar LIDs ou números mal formatados salvos em syncs anteriores.
   (async () => {
     try {
-      await (prisma as any).$executeRaw`UPDATE whatsapp_groups SET "participantsList" = NULL, "participantsSyncedAt" = NULL WHERE "participantsList" IS NOT NULL`;
+      await (prisma as any).$executeRaw`UPDATE whatsapp_groups SET participants_list = NULL, participants_synced_at = NULL WHERE participants_list IS NOT NULL`;
       logger.info(`[Startup] participantsList limpos — próximo disparo buscará dados frescos da Evolution`);
     } catch (err: any) {
       logger.warn(`[Startup] Cleanup participantsList erro: ${err.message}`);
