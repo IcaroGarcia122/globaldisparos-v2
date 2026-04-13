@@ -31,6 +31,15 @@ async function findInstance(instanceName) {
 router.post('/evolution/:event?', async (req, res) => {
     // Responde IMEDIATAMENTE — Evolution tem timeout curto
     res.json({ received: true });
+    // Verifica apikey da Evolution se configurada
+    const evolutionKey = process.env.EVOLUTION_API_KEY;
+    if (evolutionKey) {
+        const bodyKey = req.body?.apikey || req.headers['apikey'];
+        if (bodyKey && bodyKey !== evolutionKey) {
+            logger_1.default.warn(`[Webhook] Requisição com apikey inválida — ignorada`);
+            return;
+        }
+    }
     try {
         const body = req.body;
         // v2 byEvents: event vem na URL (/evolution/QRCODE_UPDATED) ou no body
@@ -85,16 +94,24 @@ router.post('/evolution/:event?', async (req, res) => {
                 }
                 await database_1.default.whatsAppInstance.update({
                     where: { id: instance.id },
-                    data: { status: 'connected', connectedAt: new Date(), qrCode: null, ...(phoneNumber ? { phoneNumber } : {}) },
+                    data: {
+                        status: 'connected',
+                        qrCode: null,
+                        ...(instance.connectedAt ? {} : { connectedAt: new Date() }),
+                        ...(phoneNumber ? { phoneNumber } : {}),
+                    },
                 });
                 logger_1.default.info(`✅ [Webhook] ${instanceName} CONECTADA${phoneNumber ? ` (${phoneNumber})` : ''}`);
                 const payload = { instanceId: instance.id, instanceName, phoneNumber, status: 'connected' };
                 (0, socket_server_1.emitToUser)(instance.userId, 'whatsapp_connected', payload);
-                // Dispara sync de grupos 45s após conectar (WhatsApp precisa sincronizar primeiro)
+                // Dispara sync imediato (5s) + segundo sync após 60s para pegar grupos que demoram
                 setTimeout(() => {
                     (0, groups_service_1.syncGroupsBackground)(instance.id).catch(() => { });
-                }, 45000);
-                logger_1.default.info(`[Webhook] Sync de grupos agendado em 45s para ${instanceName}`);
+                }, 5000);
+                setTimeout(() => {
+                    (0, groups_service_1.syncGroupsBackground)(instance.id).catch(() => { });
+                }, 60000);
+                logger_1.default.info(`[Webhook] Sync de grupos agendado em 5s e 60s para ${instanceName}`);
             }
             else if (state === 'close') {
                 if (instance.status === 'connected') {
@@ -175,27 +192,6 @@ router.get('/evolution/sync-number/:instanceName', async (req, res) => {
             await database_1.default.whatsAppInstance.update({ where: { id: instance.id }, data: { phoneNumber } });
         }
         return res.json({ instanceName, phoneNumber, state });
-    }
-    catch (err) {
-        return res.status(500).json({ error: err.message });
-    }
-});
-/** POST /api/webhook/diggion — pagamentos */
-router.post('/diggion', async (req, res) => {
-    try {
-        const { event, customer_email, amount, transaction_id, metadata } = req.body;
-        if (event === 'payment.approved') {
-            const user = await database_1.default.user.findUnique({ where: { email: customer_email } });
-            if (user) {
-                const expiresAt = new Date();
-                expiresAt.setDate(expiresAt.getDate() + (metadata?.duration || 30));
-                await database_1.default.user.update({ where: { id: user.id }, data: { plan: metadata?.plan, planExpiresAt: expiresAt } });
-                await database_1.default.payment.create({
-                    data: { userId: user.id, diggionTransactionId: transaction_id, amount, status: 'approved', plan: metadata?.plan, planDuration: metadata?.duration, expiresAt },
-                });
-            }
-        }
-        return res.json({ received: true });
     }
     catch (err) {
         return res.status(500).json({ error: err.message });
