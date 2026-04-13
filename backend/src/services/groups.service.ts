@@ -8,35 +8,32 @@ const syncRunning = new Set<string>();
 const syncProgress = new Map<string, string>();
 const participantSyncRunning = new Set<string>();
 
-// ─── NORMALIZAÇÃO DE NÚMERO BRASILEIRO ───────────────────────────────────────
+// ─── NORMALIZAÇÃO DE NÚMERO ──────────────────────────────────────────────────
 /**
- * Valida e normaliza número brasileiro para formato 55XXXXXXXXXXX (13 dígitos).
- * Aceita:  10-11 dígitos (sem 55)  |  12-13 dígitos (com 55)
- * Rejeita: LIDs (≥14 dígitos), números estrangeiros, @lid, inválidos
- * Retorna: "55" + DDD(2) + 9(1) + número(8) = 13 dígitos,  ou null se inválido
+ * Valida e normaliza número de telefone.
+ * Rejeita: LIDs (≥14 dígitos), números curtos (<8 dígitos), @lid
+ * Normaliza brasileiros para 55XXXXXXXXXXX (13 dígitos)
+ * Aceita outros números internacionais como estão (8-13 dígitos)
  */
 function normalizeBrPhone(raw: string): string | null {
   let d = raw.replace(/\D/g, '');
 
-  // Rejeita LIDs (≥14 dígitos — identificadores internos do WhatsApp/Meta)
-  if (d.length >= 14) return null;
+  // Rejeita vazio, muito curto ou LID (≥14 dígitos — IDs internos do WhatsApp/Meta)
+  if (!d || d.length < 8 || d.length >= 14) return null;
 
-  // Remove código 55 se presente (ex: 5511999990000 → 11999990000)
-  if (d.startsWith('55') && d.length >= 12) d = d.slice(2);
-
-  // Agora deve ter 10 ou 11 dígitos (DDD + número)
-  if (d.length === 10) {
-    // Fixo/celular antigo sem o 9: ex 1133330000 → 11933330000
-    d = d.slice(0, 2) + '9' + d.slice(2);
+  // Normaliza número brasileiro com código 55 (12-13 dígitos)
+  if (d.startsWith('55') && d.length >= 12 && d.length <= 13) {
+    const sem55 = d.slice(2);
+    if (sem55.length === 10) return '55' + sem55.slice(0, 2) + '9' + sem55.slice(2);
+    if (sem55.length === 11) return '55' + sem55;
   }
 
-  if (d.length !== 11) return null;
+  // Normaliza número brasileiro sem código 55 (10-11 dígitos)
+  if (d.length === 10) return '55' + d.slice(0, 2) + '9' + d.slice(2);
+  if (d.length === 11) return '55' + d;
 
-  // DDD válido: 11–99
-  const ddd = parseInt(d.slice(0, 2), 10);
-  if (ddd < 11) return null;
-
-  return '55' + d; // 13 dígitos
+  // Outros comprimentos válidos (8-9 ou 12-13 não-BR): retorna como está
+  return d;
 }
 
 // ─── SALVAR GRUPOS (chamado pelo webhook GROUPS_UPSERT) ───────────────────────

@@ -333,27 +333,40 @@ class WhatsAppService {
     try {
       const res = await this.client.get(
         `/group/findParticipants/${instanceName}?groupJid=${groupJid}`,
-        { timeout: 10000 }
+        { timeout: 15000 }
       );
       const data = res.data;
       const participants = data?.participants || data?.members || (Array.isArray(data) ? data : []);
       if (participants.length > 0) {
-        logger.info(`[Evolution] ${participants.length} participantes via findParticipants`);
+        // Log diagnóstico: mostra formato dos primeiros participantes
+        const sample = participants.slice(0, 3).map((p: any) => ({
+          id: (p.id || '').slice(0, 30),
+          phoneNumber: p.phoneNumber || null,
+          hasLid: (p.id || '').endsWith('@lid'),
+        }));
+        logger.info(`[Evolution] ${participants.length} participantes via findParticipants — amostra: ${JSON.stringify(sample)}`);
         return participants;
       }
-    } catch { /* endpoint não existe nesta versão */ }
+    } catch (err: any) {
+      logger.warn(`[Evolution] findParticipants falhou (${err?.response?.status || err.message}) — tentando fetchAllGroups`);
+    }
 
     // Fallback: fetchAllGroups com timeout maior (busca todos de uma vez)
     try {
       logger.info(`[Evolution] Buscando participantes via fetchAllGroups para ${groupJid}`);
       const res = await this.client.get(
         `/group/fetchAllGroups/${instanceName}?getParticipants=true`,
-        { timeout: 180000 } // 3 minutos — busca todos os grupos de uma vez
+        { timeout: 120000 }
       );
       const raw = Array.isArray(res.data) ? res.data : (res.data?.groups || []);
       const group = raw.find((g: any) => (g.id || g.jid) === groupJid);
       if (group?.participants?.length > 0) {
-        logger.info(`[Evolution] ${group.participants.length} participantes via fetchAllGroups`);
+        const sample = group.participants.slice(0, 3).map((p: any) => ({
+          id: (p.id || '').slice(0, 30),
+          phoneNumber: p.phoneNumber || null,
+          hasLid: (p.id || '').endsWith('@lid'),
+        }));
+        logger.info(`[Evolution] ${group.participants.length} participantes via fetchAllGroups — amostra: ${JSON.stringify(sample)}`);
         return group.participants;
       }
     } catch (err: any) {
