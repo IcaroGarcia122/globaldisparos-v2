@@ -53,31 +53,41 @@ const syncProgress = new Map();
 const participantSyncRunning = new Set();
 // ─── NORMALIZAÇÃO DE NÚMERO ──────────────────────────────────────────────────
 /**
- * Valida e normaliza número de telefone.
- * Rejeita: LIDs (≥14 dígitos), números curtos (<8 dígitos), @lid
- * Normaliza brasileiros para 55XXXXXXXXXXX (13 dígitos)
- * Aceita outros números internacionais como estão (8-13 dígitos)
+ * Valida e normaliza número de telefone BRASILEIRO.
+ * Aceita APENAS números do Brasil — rejeita LIDs, internacionais não-BR e curtos.
+ *
+ * Formatos aceitos:
+ *   10 dígitos  → DDD + 8 dígitos (formato antigo sem 9): adiciona 55 e o 9
+ *   11 dígitos  → DDD + 9 + 8 dígitos (formato atual): adiciona 55
+ *   12 dígitos  → 55 + DDD + 8 dígitos (com código, sem 9): adiciona o 9
+ *   13 dígitos  → 55 + DDD + 9 + 8 dígitos (formato completo) ✓
+ *
+ * Rejeita: tudo que não seja número BR válido (LIDs, internacionais, etc.)
  */
 function normalizeBrPhone(raw) {
     let d = raw.replace(/\D/g, '');
-    // Rejeita vazio, muito curto ou LID (≥14 dígitos — IDs internos do WhatsApp/Meta)
-    if (!d || d.length < 8 || d.length >= 14)
+    // Rejeita vazio ou LID (≥14 dígitos — IDs internos do WhatsApp/Meta)
+    if (!d || d.length < 10 || d.length >= 14)
         return null;
-    // Normaliza número brasileiro com código 55 (12-13 dígitos)
-    if (d.startsWith('55') && d.length >= 12 && d.length <= 13) {
-        const sem55 = d.slice(2);
-        if (sem55.length === 10)
-            return '55' + sem55.slice(0, 2) + '9' + sem55.slice(2);
-        if (sem55.length === 11)
-            return '55' + sem55;
+    // Número com código 55 (12-13 dígitos) — deve começar com 55
+    if (d.length === 13) {
+        if (!d.startsWith('55'))
+            return null; // rejeita 13 dígitos não-BR (ex: 3685232996379)
+        return d; // 55 + DDD + 9XXXXXXXX ✓
     }
-    // Normaliza número brasileiro sem código 55 (10-11 dígitos)
-    if (d.length === 10)
-        return '55' + d.slice(0, 2) + '9' + d.slice(2);
+    if (d.length === 12) {
+        if (!d.startsWith('55'))
+            return null; // rejeita 12 dígitos não-BR
+        // 55 + DDD + XXXXXXXX (sem 9) → adiciona 9
+        const sem55 = d.slice(2); // 10 dígitos: DDD + 8
+        return '55' + sem55.slice(0, 2) + '9' + sem55.slice(2);
+    }
+    // Número sem código 55 (10-11 dígitos) — considera sempre brasileiro
     if (d.length === 11)
-        return '55' + d;
-    // Outros comprimentos válidos (8-9 ou 12-13 não-BR): retorna como está
-    return d;
+        return '55' + d; // DDD + 9XXXXXXXX
+    if (d.length === 10)
+        return '55' + d.slice(0, 2) + '9' + d.slice(2); // DDD + XXXXXXXX → add 9
+    return null;
 }
 // ─── SALVAR GRUPOS (chamado pelo webhook GROUPS_UPSERT) ───────────────────────
 async function saveGroupsFromWebhook(instanceId, rawGroups) {
@@ -320,10 +330,12 @@ async function getParticipants(instanceId, groupJid) {
     }).catch(() => null);
     const instanceName = instanceRow?.name || `instance_${instanceId}`;
     // ── 1. Evolution em tempo real (fonte de verdade) ─────────────────────────
+    logger_1.default.info(`[Groups] Buscando participantes da Evolution para ${groupJid} (instância ${instanceName})`);
     try {
         const raw = await whatsapp_service_1.default.getGroupParticipants(instanceName, groupJid);
         if (raw.length > 0) {
             const { participants, admins } = parseRawParticipants(raw);
+            logger_1.default.info(`[Groups] Evolution: ${raw.length} raw → ${participants.length} BR válidos para ${groupJid}`);
             if (participants.length > 0) {
                 // Salva no banco em background (não bloqueia a resposta)
                 database_1.default.whatsAppGroup.updateMany({
@@ -334,10 +346,12 @@ async function getParticipants(instanceId, groupJid) {
                         participantsSyncedAt: new Date(),
                     },
                 }).catch(() => { });
-                logger_1.default.info(`[Groups] ✅ ${participants.length} participantes da Evolution para ${groupJid}`);
                 return { participants, admins, total: participants.length, source: 'evolution' };
             }
-            logger_1.default.warn(`[Groups] Evolution retornou ${raw.length} itens mas 0 números BR válidos para ${groupJid}`);
+            logger_1.default.warn(`[Groups] Evolution retornou ${raw.length} participantes mas TODOS são @lid/@g.us — grupo usa privacidade LID do Meta`);
+        }
+        else {
+            logger_1.default.warn(`[Groups] Evolution retornou lista vazia para ${groupJid}`);
         }
     }
     catch (err) {
@@ -351,6 +365,7 @@ async function getParticipants(instanceId, groupJid) {
     const cached = row?.participantsList;
     if (cached?.participants?.length > 0) {
         // Reprocessa os números do banco pelo normalizeBrPhone para limpar dados sujos
+        // (filtra LIDs, números internacionais e formatos inválidos)
         const participants = [];
         const admins = [];
         for (const p of cached.participants) {
@@ -363,12 +378,12 @@ async function getParticipants(instanceId, groupJid) {
             if (phone)
                 admins.push(phone);
         }
+        logger_1.default.info(`[Groups] DB fallback: ${cached.participants.length} raw → ${participants.length} BR válidos para ${groupJid}`);
         if (participants.length > 0) {
-            logger_1.default.info(`[Groups] ${participants.length} participantes do banco (fallback) para ${groupJid}`);
             return { participants, admins, total: participants.length, source: 'db_cache' };
         }
     }
-    logger_1.default.warn(`[Groups] Sem participantes para ${groupJid} — nenhuma fonte disponível`);
+    logger_1.default.warn(`[Groups] Sem participantes BR válidos para ${groupJid} — Evolution retornou só @lid e DB está vazio/inválido`);
     return { participants: [], admins: [], total: 0, source: 'none' };
 }
 //# sourceMappingURL=groups.service.js.map
