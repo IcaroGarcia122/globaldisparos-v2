@@ -32,6 +32,15 @@ const InstanceManager: React.FC = () => {
   const reloadInstances = useCallback(async () => {
     try {
       const response = await fetchAPI('/instances');
+
+      // Token expirado ou inválido — redireciona para login
+      if (response?._httpStatus === 401) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        window.location.href = '/auth';
+        return [];
+      }
+
       const data = response?.data || response?.instances || response || [];
       const list = Array.isArray(data) ? data : [];
       setInstances(list);
@@ -39,7 +48,7 @@ const InstanceManager: React.FC = () => {
       setSelectedInstance(prev => {
         if (!prev) return list.length > 0 ? list[0] : null;
         const updated = list.find((i: Instance) => i.id === prev.id);
-        return updated || prev;
+        return updated || (list.length > 0 ? prev : null);
       });
       return list;
     } catch (error) {

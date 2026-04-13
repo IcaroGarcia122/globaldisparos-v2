@@ -71,26 +71,8 @@ const server = http_1.default.createServer(app);
 app.use((0, helmet_1.default)({ contentSecurityPolicy: false }));
 // Cloudflare e Nginx enviam X-Forwarded-For — necessário para rate limiting correto
 app.set('trust proxy', 1);
-const allowedOrigins = [
-    process.env.FRONTEND_URL || 'http://localhost:5173',
-    'http://localhost:5173',
-    'http://localhost:3000',
-];
-// Aceita também www. prefixado
-if (process.env.FRONTEND_URL) {
-    const u = process.env.FRONTEND_URL;
-    if (!u.includes('www.'))
-        allowedOrigins.push(u.replace('https://', 'https://www.'));
-}
 app.use((0, cors_1.default)({
-    origin: (origin, cb) => {
-        // Permite requests sem origin (mobile, Postman, webhooks)
-        if (!origin)
-            return cb(null, true);
-        if (allowedOrigins.includes(origin))
-            return cb(null, true);
-        cb(null, true); // Em produção, pode restringir aqui se necessário
-    },
+    origin: true, // Permite qualquer origem — segurança feita via JWT em cada rota
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 }));
@@ -138,12 +120,24 @@ async function start() {
             await database_2.default.user.create({
                 data: { email: 'admin@gmail.com', password: hash, fullName: 'Administrador', role: 'admin', plan: 'enterprise', isActive: true },
             });
-            logger_1.default.info('[Seed] Admin criado: admin@gmail.com / vip2026');
+            logger_1.default.info('[Seed] Admin criado com sucesso');
         }
     }
     catch (err) {
         logger_1.default.warn(`[Seed] ${err.message}`);
     }
+    // 4a. Limpar participantsList do banco — força re-fetch da Evolution com dados corretos.
+    // Garante que getParticipants sempre busca números frescos via findParticipants endpoint
+    // em vez de retornar LIDs ou números mal formatados salvos em syncs anteriores.
+    (async () => {
+        try {
+            await database_2.default.$executeRaw `UPDATE whatsapp_groups SET participants_list = NULL, participants_synced_at = NULL WHERE participants_list IS NOT NULL`;
+            logger_1.default.info(`[Startup] participantsList limpos — próximo disparo buscará dados frescos da Evolution`);
+        }
+        catch (err) {
+            logger_1.default.warn(`[Startup] Cleanup participantsList erro: ${err.message}`);
+        }
+    })();
     // 4. Sincronizar Evolution com banco e registrar webhooks
     (async () => {
         try {

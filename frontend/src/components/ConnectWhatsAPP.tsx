@@ -87,6 +87,10 @@ const ConnectWhatsApp: React.FC<ConnectWhatsAppProps> = ({ instanceId, onConnect
   };
 
   const connect = async () => {
+    if (!instanceId) {
+      setError('ID da instância inválido. Recarregue a página.');
+      return;
+    }
     clearAll();
     setLoading(true);
     setError('');

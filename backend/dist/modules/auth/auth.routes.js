@@ -59,7 +59,7 @@ router.post('/login', rateLimiter_1.authLimiter, async (req, res) => {
             return res.status(401).json({ error: 'Credenciais inválidas' });
         await database_1.default.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
         const token = jsonwebtoken_1.default.sign({ userId: user.id }, process.env.JWT_SECRET, {
-            expiresIn: (process.env.JWT_EXPIRES_IN || '7d'),
+            expiresIn: (process.env.JWT_EXPIRES_IN || '30d'),
         });
         logger_1.default.info(`[Auth] Login: ${email}`);
         return res.json({ token, user: { id: user.id, email: user.email, fullName: user.fullName, role: user.role, plan: user.plan } });
@@ -83,7 +83,7 @@ router.post('/register', async (req, res) => {
             data: { email, password: hash, fullName: fullName || email.split('@')[0], plan: plan || 'basic' },
         });
         const token = jsonwebtoken_1.default.sign({ userId: user.id }, process.env.JWT_SECRET, {
-            expiresIn: (process.env.JWT_EXPIRES_IN || '7d'),
+            expiresIn: (process.env.JWT_EXPIRES_IN || '30d'),
         });
         // Enviar email de boas-vindas (não bloqueia a resposta)
         (0, email_service_1.sendWelcome)(user.email, user.fullName, user.plan).catch(() => { });
@@ -254,7 +254,7 @@ router.post('/invite/:token', async (req, res) => {
     UPDATE invite_tokens SET used_by = ${user.id}, used_at = NOW() WHERE token = ${inviteToken}
   `;
     const token = jsonwebtoken_1.default.sign({ userId: user.id }, process.env.JWT_SECRET, {
-        expiresIn: (process.env.JWT_EXPIRES_IN || '7d'),
+        expiresIn: (process.env.JWT_EXPIRES_IN || '30d'),
     });
     logger_1.default.info(`[Invite] Conta criada via convite: ${email} plano=${invite.plan}`);
     return res.status(201).json({ token, user: { id: user.id, email: user.email, fullName: user.fullName, role: user.role, plan: user.plan, planExpiresAt: user.planExpiresAt } });
@@ -329,15 +329,32 @@ router.post('/reset-password/:token', async (req, res) => {
     logger_1.default.info(`[Auth] Senha redefinida para user ${row.created_by}`);
     return res.json({ message: 'Senha redefinida com sucesso. Faça login.' });
 });
+/** POST /api/auth/validate-payment-ref — valida o ref da IronPay no servidor (ref nunca exposto no bundle) */
+router.post('/validate-payment-ref', async (req, res) => {
+    const { ref, plan } = req.body;
+    const expectedRef = process.env.PAYMENT_REF;
+    if (!expectedRef) {
+        logger_1.default.warn('[Payment] PAYMENT_REF não configurado no .env');
+        return res.status(503).json({ error: 'Configuração ausente' });
+    }
+    if (!ref || ref !== expectedRef) {
+        logger_1.default.warn('[Payment] Tentativa com ref inválido');
+        return res.status(403).json({ error: 'Acesso não autorizado' });
+    }
+    return res.json({ valid: true, plan: plan || 'mensal' });
+});
 /** POST /api/auth/payment-token — gera token de pagamento válido por 30min
- *  Chamado pelo webhook do Diggion/Ironpay após compra aprovada
- *  Ou pode ser chamado pelo admin para liberar acesso manual
+ *  Pode ser chamado pelo admin para liberar acesso manual ou por webhook de pagamento
  */
 router.post('/payment-token', async (req, res) => {
     const { plan, email, webhookSecret, transactionId } = req.body;
     // Validar secret do webhook (configurar no .env como WEBHOOK_SECRET)
     const expectedSecret = process.env.PAYMENT_WEBHOOK_SECRET;
-    if (expectedSecret && webhookSecret !== expectedSecret) {
+    if (!expectedSecret) {
+        logger_1.default.error('[Payment] PAYMENT_WEBHOOK_SECRET não configurado — endpoint bloqueado por segurança');
+        return res.status(503).json({ error: 'Serviço não configurado' });
+    }
+    if (webhookSecret !== expectedSecret) {
         logger_1.default.warn(`[Payment] Tentativa com secret inválido`);
         return res.status(403).json({ error: 'Acesso negado' });
     }

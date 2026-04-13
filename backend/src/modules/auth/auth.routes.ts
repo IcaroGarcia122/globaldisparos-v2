@@ -24,7 +24,7 @@ router.post('/login', authLimiter, async (req: Request, res: Response) => {
     await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
 
     const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET!, {
-      expiresIn: (process.env.JWT_EXPIRES_IN || '7d') as any,
+      expiresIn: (process.env.JWT_EXPIRES_IN || '30d') as any,
     });
 
     logger.info(`[Auth] Login: ${email}`);
@@ -50,7 +50,7 @@ router.post('/register', async (req: Request, res: Response) => {
     });
 
     const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET!, {
-      expiresIn: (process.env.JWT_EXPIRES_IN || '7d') as any,
+      expiresIn: (process.env.JWT_EXPIRES_IN || '30d') as any,
     });
 
     // Enviar email de boas-vindas (não bloqueia a resposta)
@@ -228,7 +228,7 @@ router.post('/invite/:token', async (req: Request, res: Response) => {
   `;
 
   const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET!, {
-    expiresIn: (process.env.JWT_EXPIRES_IN || '7d') as any,
+    expiresIn: (process.env.JWT_EXPIRES_IN || '30d') as any,
   });
 
   logger.info(`[Invite] Conta criada via convite: ${email} plano=${invite.plan}`);

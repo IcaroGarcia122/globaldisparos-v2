@@ -311,24 +311,36 @@ class WhatsAppService {
     async getGroupParticipants(instanceName, groupJid) {
         // Tentar endpoint direto por grupo primeiro (mais rápido)
         try {
-            const res = await this.client.get(`/group/findParticipants/${instanceName}?groupJid=${groupJid}`, { timeout: 10000 });
+            const res = await this.client.get(`/group/findParticipants/${instanceName}?groupJid=${groupJid}`, { timeout: 15000 });
             const data = res.data;
             const participants = data?.participants || data?.members || (Array.isArray(data) ? data : []);
             if (participants.length > 0) {
-                logger_1.default.info(`[Evolution] ${participants.length} participantes via findParticipants`);
+                // Log diagnóstico: mostra formato dos primeiros participantes
+                const sample = participants.slice(0, 3).map((p) => ({
+                    id: (p.id || '').slice(0, 30),
+                    phoneNumber: p.phoneNumber || null,
+                    hasLid: (p.id || '').endsWith('@lid'),
+                }));
+                logger_1.default.info(`[Evolution] ${participants.length} participantes via findParticipants — amostra: ${JSON.stringify(sample)}`);
                 return participants;
             }
         }
-        catch { /* endpoint não existe nesta versão */ }
+        catch (err) {
+            logger_1.default.warn(`[Evolution] findParticipants falhou (${err?.response?.status || err.message}) — tentando fetchAllGroups`);
+        }
         // Fallback: fetchAllGroups com timeout maior (busca todos de uma vez)
         try {
             logger_1.default.info(`[Evolution] Buscando participantes via fetchAllGroups para ${groupJid}`);
-            const res = await this.client.get(`/group/fetchAllGroups/${instanceName}?getParticipants=true`, { timeout: 180000 } // 3 minutos — busca todos os grupos de uma vez
-            );
+            const res = await this.client.get(`/group/fetchAllGroups/${instanceName}?getParticipants=true`, { timeout: 120000 });
             const raw = Array.isArray(res.data) ? res.data : (res.data?.groups || []);
             const group = raw.find((g) => (g.id || g.jid) === groupJid);
             if (group?.participants?.length > 0) {
-                logger_1.default.info(`[Evolution] ${group.participants.length} participantes via fetchAllGroups`);
+                const sample = group.participants.slice(0, 3).map((p) => ({
+                    id: (p.id || '').slice(0, 30),
+                    phoneNumber: p.phoneNumber || null,
+                    hasLid: (p.id || '').endsWith('@lid'),
+                }));
+                logger_1.default.info(`[Evolution] ${group.participants.length} participantes via fetchAllGroups — amostra: ${JSON.stringify(sample)}`);
                 return group.participants;
             }
         }
@@ -352,45 +364,71 @@ class WhatsAppService {
             return { synced: 0, failed: 0 };
         }
     }
-    /** Retorna grupos onde a instância tem role de admin/superadmin */
+    /**
+     * Retorna grupos onde a instância tem role de admin ou superadmin.
+     * Tenta detectar via campo `participants` (se disponível) ou via campo `owner`.
+     */
     async getGroupsWhereAdmin(instanceName, ownerPhoneFromDb) {
-        // Evolution v2.3.6: getParticipants=true retorna 404
-        // Usar getParticipants=false (funciona) + filtrar pelo campo "owner" do grupo
-        // owner = criador do grupo, sempre é admin/superadmin
         try {
             const ownerPhone = (ownerPhoneFromDb || '').replace(/[^0-9]/g, '');
             if (!ownerPhone) {
                 logger_1.default.warn(`[AdminGroups] ownerPhone vazio para ${instanceName}`);
                 return [];
             }
+            const suffix = ownerPhone.slice(-8);
+            // Tentativa 1: fetchAllGroups com participants (pode funcionar em algumas versões)
+            try {
+                const res = await this.client.get(`/group/fetchAllGroups/${instanceName}?getParticipants=true`, { timeout: 60000 });
+                const raw = Array.isArray(res.data) ? res.data : (res.data?.groups || res.data?.value || []);
+                const withParticipants = raw.filter((g) => (g.id || g.jid || '').includes('@g.us') && Array.isArray(g.participants) && g.participants.length > 0);
+                if (withParticipants.length > 0) {
+                    const adminGroups = [];
+                    for (const g of withParticipants) {
+                        const gid = g.id || g.jid;
+                        // Checar se nosso número é admin ou superadmin na lista de participantes
+                        const isAdmin = g.participants.some((p) => {
+                            const jid = p.id || p.jid || p.phoneNumber || '';
+                            const phone = jid.replace(/[^0-9]/g, '');
+                            return phone.endsWith(suffix) && (p.admin === 'admin' || p.admin === 'superadmin');
+                        });
+                        if (isAdmin) {
+                            adminGroups.push({ groupId: gid, name: g.subject || g.name || gid.slice(-12), participantsCount: g.size || g.participants.length });
+                        }
+                    }
+                    if (adminGroups.length > 0) {
+                        logger_1.default.info(`[AdminGroups] ${adminGroups.length} grupos com admin via participants`);
+                        return adminGroups;
+                    }
+                }
+            }
+            catch { /* versão não suporta getParticipants=true */ }
+            // Tentativa 2: fetchAllGroups sem participants, filtra por owner
             const res = await this.client.get(`/group/fetchAllGroups/${instanceName}?getParticipants=false`, { timeout: 60000 });
             const raw = Array.isArray(res.data) ? res.data : (res.data?.groups || res.data?.value || []);
             logger_1.default.info(`[AdminGroups] ${raw.length} grupos obtidos para "${instanceName}" (phone: ${ownerPhone})`);
             if (!raw.length)
                 return [];
-            // Log diagnóstico na primeira chamada
             const first = raw.find((g) => (g.id || g.jid || '').includes('@g.us'));
-            if (first)
+            if (first) {
                 logger_1.default.info(`[AdminGroups] Campos disponíveis: ${Object.keys(first).join(', ')}`);
-            const suffix = ownerPhone.slice(-8); // últimos 8 dígitos para comparar
+                logger_1.default.info(`[AdminGroups] Amostra do primeiro grupo: ${JSON.stringify(first).slice(0, 300)}`);
+            }
             const adminGroups = [];
             for (const g of raw) {
                 const gid = g.id || g.jid || '';
                 if (!gid.includes('@g.us'))
                     continue;
-                // Campo owner: "554299538607@s.whatsapp.net" ou "55429...@c.us"
-                const ownerJid = (g.owner || g.ownerJid || '').replace(/[^0-9]/g, '');
-                const isOwner = ownerJid.endsWith(suffix);
-                // Criador = dono = sempre admin. Admins não-criadores não detectáveis sem participants.
-                if (isOwner) {
-                    adminGroups.push({
-                        groupId: gid,
-                        name: g.subject || g.name || gid.slice(-12),
-                        participantsCount: g.size || 0,
-                    });
+                // Checa owner (criador do grupo)
+                const ownerJid = (g.owner || g.ownerJid || g.ownerNumber || '').replace(/[^0-9]/g, '');
+                const isOwner = ownerJid.length > 0 && ownerJid.endsWith(suffix);
+                // Checa se está na lista de admins do grupo (campo announce ou admins[])
+                const rawAdmins = g.admins || g.administrators || [];
+                const isAdminInList = rawAdmins.some((a) => a.replace(/[^0-9]/g, '').endsWith(suffix));
+                if (isOwner || isAdminInList) {
+                    adminGroups.push({ groupId: gid, name: g.subject || g.name || gid.slice(-12), participantsCount: g.size || 0 });
                 }
             }
-            logger_1.default.info(`[AdminGroups] ${adminGroups.length} grupos onde ${ownerPhone} é owner/admin`);
+            logger_1.default.info(`[AdminGroups] ${adminGroups.length} grupos onde ${ownerPhone} é owner/admin (suffix=${suffix})`);
             return adminGroups;
         }
         catch (err) {

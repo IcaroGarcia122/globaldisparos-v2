@@ -51,13 +51,20 @@ const UserDashboard: React.FC = () => {
   const reloadInstances = async () => {
     setLoadingInstances(true);
     try {
-      console.log('🔄 Carregando instâncias...');
       const response = await fetchAPI('/instances');
-      // API retorna {data: [...], pagination: {...}} ou {instances: [...], pagination: {...}}
+
+      // Token expirado — redireciona para login
+      if (response?._httpStatus === 401) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        window.location.href = '/auth';
+        return;
+      }
+
       const data = response?.data || response?.instances || response || [];
-      console.log(`✅ ${data.length} instância(s) carregada(s):`, data);
-      setInstances(Array.isArray(data) ? data : []);
-      if (data.length > 0) {
+      const list = Array.isArray(data) ? data : [];
+      setInstances(list);
+      if (list.length > 0) {
         setSelectedInstanceIndex(0);
       }
     } catch (error) {
