@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -r \"pollRef\\\\|statusPollRef\\\\|qrPollRef\\\\|setInterval\\\\|setTimeout\" /c/Users/Icaro Garcia/Documents/globaldisparos/frontend/src/components/*.tsx)",
+      "Bash(xargs grep:*)",
+      "Bash(grep -n \"case ''grupos''\" \"/c/Users/Icaro Garcia/Documents/globaldisparos/frontend/src/pages/UserDashboard.tsx\")",
+      "Bash(grep -n \"case ''contatos''\" \"/c/Users/Icaro Garcia/Documents/globaldisparos/frontend/src/pages/UserDashboard.tsx\")",
+      "Bash(cd /c/Users/Icaro Garcia/Documents/globaldisparos/frontend)",
+      "Bash(npx tsc:*)",
+      "Bash(npm run:*)"
+    ]
+  }
+}
